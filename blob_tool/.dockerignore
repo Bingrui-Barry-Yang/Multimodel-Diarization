@@ -1,0 +1,6 @@
+.venv
+workspace
+samples
+models
+tests
+**/__pycache__

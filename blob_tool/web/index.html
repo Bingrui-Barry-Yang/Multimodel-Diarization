@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blob Tool</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo"></span>Blob Tool <small>privacy filter for classroom video</small></div>
+    <div class="topbar-right"><span id="device-note" class="muted"></span></div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="card">
+        <h2>New video</h2>
+        <label id="dropzone" class="dropzone">
+          <input id="file-input" type="file" accept="video/*" hidden>
+          <div class="dz-icon">⇪</div>
+          <div><strong>Drop a video here</strong> or click to choose</div>
+          <div class="muted small" id="file-name">mp4, mov, webm, avi…</div>
+        </label>
+
+        <details class="settings" open>
+          <summary>Settings</summary>
+          <div class="field">
+            <label for="engine">Tracking engine</label>
+            <select id="engine"></select>
+          </div>
+          <div class="field">
+            <label>Objects to blob</label>
+            <div id="classes" class="chips"></div>
+            <select id="class-add" class="small-select"><option value="">+ add another class…</option></select>
+          </div>
+          <div class="field row">
+            <div>
+              <label for="model-size">Detector size</label>
+              <select id="model-size">
+                <option value="n">nano (fastest)</option>
+                <option value="s" selected>small</option>
+                <option value="m">medium</option>
+                <option value="l">large (best)</option>
+              </select>
+            </div>
+            <div>
+              <label for="style">Blob style</label>
+              <select id="style"></select>
+            </div>
+          </div>
+          <div class="field">
+            <label for="smooth">Blob smoothness <output id="smooth-out"></output></label>
+            <input id="smooth" type="range" min="0" max="1" step="0.05" value="0.5">
+          </div>
+          <div class="field">
+            <label for="alpha">Voice: McAdams α <output id="alpha-out"></output></label>
+            <input id="alpha" type="range" min="0.5" max="1" step="0.01" value="0.8">
+            <div class="hint">1.0 = unchanged. Lower moves formants further. Same α for everyone keeps speakers distinguishable.</div>
+          </div>
+          <div class="field">
+            <label for="pitch">Voice: pitch shift <output id="pitch-out"></output></label>
+            <input id="pitch" type="range" min="-6" max="6" step="0.5" value="0">
+          </div>
+          <div class="field">
+            <label class="check"><input id="discard" type="checkbox"> Discard original after processing (phone mode)</label>
+          </div>
+        </details>
+
+        <button id="process-btn" class="primary" disabled>Process video</button>
+      </section>
+
+      <section class="card">
+        <h2>Jobs</h2>
+        <ul id="job-list" class="job-list"><li class="muted small">No jobs yet</li></ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <div id="empty" class="empty">
+        <div class="empty-art"><span></span><span></span><span></span></div>
+        <h1>Turn a classroom video into tracked blobs</h1>
+        <p class="muted">Drop a video on the left. Every person becomes a coloured blob that keeps its colour over time, and voices are altered. Then compare before and after.</p>
+      </div>
+
+      <div id="progress-view" class="progress-view" hidden>
+        <h2 id="progress-title">Processing…</h2>
+        <ol id="stages" class="stages"></ol>
+        <div class="bar"><div id="bar-fill"></div></div>
+        <div id="progress-msg" class="muted small"></div>
+      </div>
+
+      <div id="viewer" class="viewer" hidden>
+        <div class="viewer-head">
+          <div>
+            <h2 id="viewer-title"></h2>
+            <div id="viewer-meta" class="muted small"></div>
+          </div>
+          <div class="seg" id="mode-seg" role="tablist">
+            <button data-mode="original">Original</button>
+            <button data-mode="blobs" class="active">Blobs</button>
+            <button data-mode="overlay">Overlay</button>
+            <button data-mode="split">Split</button>
+          </div>
+        </div>
+
+        <div class="viewer-body">
+          <div class="stage-wrap">
+            <div id="stage" class="stage">
+              <video id="v-orig" playsinline muted preload="auto"></video>
+              <video id="v-proc" playsinline muted preload="auto"></video>
+              <canvas id="overlay"></canvas>
+              <div id="split-handle" class="split-handle" hidden><span></span></div>
+              <div id="stage-badge" class="stage-badge"></div>
+            </div>
+
+            <div class="controls">
+              <button id="play" class="icon" title="Play/pause (space)">▶</button>
+              <button id="step-back" class="icon" title="Previous frame (←)">⏮</button>
+              <button id="step-fwd" class="icon" title="Next frame (→)">⏭</button>
+              <span id="time" class="time">0:00.0 / 0:00.0</span>
+              <div class="seek-wrap">
+                <canvas id="presence"></canvas>
+                <input id="seek" type="range" min="0" max="1000" step="1" value="0">
+              </div>
+              <select id="rate" title="Playback speed">
+                <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option><option value="2">2×</option>
+              </select>
+              <div class="seg small" id="audio-seg" title="Which audio to hear">
+                <button data-audio="altered" class="active">🔊 Altered</button>
+                <button data-audio="original">Original</button>
+                <button data-audio="mute">Mute</button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="objects">
+            <div class="objects-head">
+              <h3>Objects <span id="obj-count" class="muted"></span></h3>
+              <button id="show-all" class="link">show all</button>
+            </div>
+            <div class="hint">Click a blob in the video or a row here to select it.</div>
+            <ul id="obj-list" class="obj-list"></ul>
+            <div class="downloads">
+              <h3>Downloads</h3>
+              <a id="dl-video" class="btn" download>Processed video</a>
+              <a id="dl-audio" class="btn" download>Altered audio</a>
+              <a id="dl-tracks" class="btn" download>tracks.json</a>
+              <button id="discard-btn" class="btn danger">Delete original files</button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

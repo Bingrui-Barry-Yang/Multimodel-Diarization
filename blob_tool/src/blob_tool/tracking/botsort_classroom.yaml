@@ -1,0 +1,17 @@
+# Adapted from ultralytics/cfg/trackers/botsort.yaml
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+#
+# BoT-SORT tuned for classroom footage: people sit still for long stretches and are often
+# occluded by each other, so lost tracks are kept alive longer and appearance ReID is on.
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.35
+track_buffer: 150 # ~5 s at 30 fps
+match_thresh: 0.8
+fuse_score: True
+gmc_method: sparseOptFlow # handheld phone footage moves
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: True
+model: auto # reuse detector features, no extra ReID weights

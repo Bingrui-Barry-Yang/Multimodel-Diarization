@@ -1,0 +1,15 @@
+services:
+  blob-tool:
+    build: .
+    image: blob-tool:latest
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    volumes:
+      - ./workspace:/data/workspace   # jobs persist on the host
+      - blob-models:/data/models      # model weights download once
+      - blob-cache:/data/hf
+    restart: unless-stopped
+
+volumes:
+  blob-models:
+  blob-cache:
