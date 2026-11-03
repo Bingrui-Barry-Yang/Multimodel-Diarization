@@ -5,7 +5,7 @@
 This project does privacy-preserving classroom analysis. Raw classroom video becomes **tracked colour blobs + altered voice**, so that nothing identifies the children. Local multimodal models and traditional diarization then run on that processed data. The research question is whether models can still extract speaker and turn-taking features from blobs alone.
 
 - **Stage 1 (done):** `blob_tool/`, a localhost "filter" app. Upload a video, then compare before/after, inspect objects, and download the blob video, altered audio and `tracks.json`.
-- **Stage 2 (next):** diarization on the outputs (`tracks.json` + `altered.wav`). The AMI sample with ground-truth `.rttm` is the evaluation starting point.
+- **Stage 2 (next):** diarization on the outputs (`tracks.json` + `altered.wav`). The AMI sample with ground-truth `.rttm` is the evaluation starting point; ClassBank lessons (`.rttm` + `.transcript.tsv`) give real-classroom ground truth.
 - **End goal:** the same tool on a phone, recording live and saving **only** the processed output, never the original.
 
 ## Commands
@@ -17,7 +17,8 @@ make install       # uv sync --inexact
 make run           # http://127.0.0.1:8000 (host venv, uses MPS/CUDA). PORT=… HOST=… to override
 make dev           # same, with auto-reload on src/ changes
 make test          # pytest; no model downloads needed
-make sample-data   # openly licensed test clips into blob_tool/samples/
+make sample-data   # one busiest-30 s clip per dataset (AMI + each ClassBank corpus) → blob_tool/samples/sample/
+make all-data      # every recording in samples/raw/, full length → blob_tool/samples/all/
 make install-sam   # optional EdgeTAM / SAM 3 engines (transformers, accelerate, timm)
 make docker-build / docker-run / docker-stop   # CPU-only container
 ```
@@ -44,7 +45,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - `src/blob_tool/jobs.py`: job dirs in `workspace/<id>/`, one sequential worker thread, `PUBLIC_FILES` allow-list.
 - `src/blob_tool/app.py`: FastAPI. `/api/config`, `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, plus the static `web/`.
 - `web/`: vanilla JS/CSS with no build step. A canvas overlay draws polygons from `tracks.json`. Deep links take the form `#job=<id>&mode=overlay&t=4&sel=3`.
-- `scripts/fetch_samples.py`: sample downloader. It writes `samples/SOURCES.md` with licenses.
+- `scripts/build_samples.py`: downloads AMI into `samples/raw/ami/`, pairs ClassBank videos with their `.cha` in `samples/raw/classbank/<corpus>/`, and writes `samples/<sample|all>/<dataset>/[<corpus>/]<recording>/` with `.mp4` + `.rttm` (+ `.transcript.tsv`) and a `SOURCES.md` per mode.
 
 ## Invariants — do not break
 
@@ -62,8 +63,10 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - The EdgeTAM transformers checkpoint is `yonigozlan/EdgeTAM-hf` (`facebook/EdgeTAM` is the raw `.pt`), and it needs `timm`.
 - `facebook/sam3` is gated. It needs license acceptance and `uv run hf auth login`. The official Meta repo is CUDA-only, so use the transformers implementation.
 - The repo is **AGPL-3.0** (`LICENSE`) because Ultralytics YOLO is AGPL-3.0. A closed-source app would need an enterprise license or a swap to RF-DETR/RT-DETR.
-- Any new model, dataset, or adapted code must be added to the *Third-party components* table and *References* in `blob_tool/README.md`, with its license verified at the source. Sample media are never committed (the Pexels License forbids redistribution).
+- Any new model, dataset, or adapted code must be added to the *Third-party components* table and *References* in `blob_tool/README.md`, with its license verified at the source. Sample media are never committed (footage of people; most licenses forbid redistribution).
 - Headless Chrome screenshots do not paint `<video>` layers, and seek events do not fire under `--virtual-time-budget`. Check playback in a real browser.
+- ClassBank media need a free TalkBank login, so they are downloaded by hand, not by `make sample-data`. The license is CC BY-NC-SA 4.0 and every use must cite the corpus reference on its page (`CORPORA` in `build_samples.py`).
+- Pexels clips were dropped: they have no usable classroom audio and no ground truth.
 - AMI `ES2002a` is a 352×288 fisheye. Track fragmentation there (~24 IDs for 4 people) comes from the source quality, not a pipeline bug.
 
 ## Conventions
@@ -72,3 +75,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - Match the existing style: dataclasses for params (`TrackParams`, `BlobParams`, `VoiceParams`, built by `PipelineParams.from_dict`), short module docstrings, few comments.
 - New tracking engines implement `Tracker.run(...)` and register in `tracking/__init__.py` with a lazy import.
 - Tests use a fake tracker (`tests/test_pipeline_smoke.py`), so they stay download-free.
+
+## Workflow
+
+- Before suggesting a commit, update this `CLAUDE.md` so it reflects the change (commands, layout, gotchas, stage status).
+- Before a push, update `blob_tool/README.md` so it matches what is being pushed (usage, sample data, third-party table, references).

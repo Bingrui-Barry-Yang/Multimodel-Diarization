@@ -61,10 +61,11 @@ make run            # → open http://127.0.0.1:8000
 ### 5. Try it with sample videos (optional)
 
 ```bash
-make sample-data    # 3 Pexels classroom clips + 3 min of the AMI meeting corpus → blob_tool/samples/
+make sample-data    # one 30 s clip per dataset → blob_tool/samples/sample/
+make all-data       # every downloaded recording, full length → blob_tool/samples/all/
 ```
 
-Drag any file from `blob_tool/samples/` onto the page and click **Process video**. A 20 s 1080p clip takes about a minute on an M3 Max with the default YOLO engine.
+ClassBank lessons need a manual download first (see [Test data](#test-data)); without them only AMI is built. Drag any `.mp4` from `blob_tool/samples/sample/` onto the page and click **Process video**. A 20 s 1080p clip takes about a minute on an M3 Max with the default YOLO engine.
 
 ### 6. Run the tests
 
@@ -157,11 +158,25 @@ The **same α is used for the whole recording**, so all speakers move through th
 
 ## Test data
 
-`make sample-data` downloads clips into `samples/` (gitignored, never committed) and records each source, license and modification in `samples/SOURCES.md`. **The clips themselves are not redistributed by this repo.** The script only fetches them from their original hosts.
+`scripts/build_samples.py` reads the original recordings from `samples/raw/<dataset>/` and writes them, with ground-truth speaker turns, into `samples/` (gitignored, never committed). **The recordings themselves are not redistributed by this repo.**
 
-- **Pexels classroom clips** (videos [8617053](https://www.pexels.com/video/8617053/), [8342233](https://www.pexels.com/video/8342233/), [8616777](https://www.pexels.com/video/8616777/)): teacher + students, one vertical phone-style clip. Licensed under the [Pexels License](https://www.pexels.com/license/), which allows free use and modification and does not require attribution, but does not allow redistributing the media as-is. Modification: trimmed to 20 s, scaled to ≤1080p, audio removed.
-- **AMI Meeting Corpus `ES2002a`**: corner camera + mixed headset audio, 3 minutes, 4 speakers. © the AMI Consortium, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) ([AMI license page](https://groups.inf.ed.ac.uk/ami/corpus/license.shtml)). Modification: trimmed to 50–230 s, video and audio muxed and re-encoded to H.264/AAC. Useful for checking voice distinguishability now and for diarization evaluation later.
-- **AMI ground-truth speaker turns** (`.rttm`): from [pyannote/AMI-diarization-setup](https://github.com/pyannote/AMI-diarization-setup) (Apache-2.0), "only_words" setup by Landini et al. [9]. Modification: timestamps shifted and clipped to the trimmed window.
+- `make sample-data`: one recording per dataset/corpus, cut to its busiest 30 s (most speaker changes; `--duration` to change), into `samples/sample/`.
+- `make all-data`: every recording found under `samples/raw/`, full length, into `samples/all/`.
+
+Each recording gets its own folder, `samples/<sample|all>/<dataset>/[<corpus>/]<recording>/`, holding `<recording>.mp4`, `<recording>.rttm` and, for ClassBank, `<recording>.transcript.tsv` (start, end, speaker, role, text). Sources, licenses and modifications are listed in `samples/<sample|all>/SOURCES.md`.
+
+```text
+samples/
+  raw/ami/                          ES2002a.Corner.avi, ES2002a.Mix-Headset.wav, ES2002a.rttm (auto-downloaded)
+  raw/classbank/<corpus>/           .cha transcripts + lesson videos (manual download)
+  sample/ami/ES2002a/               ES2002a.mp4, ES2002a.rttm
+  sample/classbank/Curtis/dec01a/   dec01a.mp4, dec01a.rttm, dec01a.transcript.tsv
+  all/…                             same layout, full length
+```
+
+- **AMI Meeting Corpus `ES2002a`**: corner camera + mixed headset audio, 4 speakers, downloaded automatically into `samples/raw/ami/`. © the AMI Consortium, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) ([AMI license page](https://groups.inf.ed.ac.uk/ami/corpus/license.shtml)). Modification: video and audio muxed and re-encoded to H.264/AAC; cut to the busiest 30 s for `sample-data`. Useful for checking voice distinguishability now and for diarization evaluation later.
+- **AMI ground-truth speaker turns** (`.rttm`): from [pyannote/AMI-diarization-setup](https://github.com/pyannote/AMI-diarization-setup) (Apache-2.0), "only_words" setup by Landini et al. [9]. Modification: timestamps shifted and clipped to the cut window (`sample-data` only).
+- **ClassBank classroom lessons** (manual download): real-speed classroom video with audio and CHAT transcripts (who said what, with millisecond timestamps), from TalkBank's ClassBank [11], licensed [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Recommended corpora: [TIMSS-Math/USA](https://talkbank.org/class/access/TIMSS-Math/USA.html) (8th-grade math, doi:10.21415/T5Z30S, cite [12]) and [Curtis](https://talkbank.org/class/access/Curtis.html) (2nd-grade geometry, doi:10.21415/T5V890, cite [13]). Media need a free TalkBank login. On the corpus page download the transcript zip and, from its media folder, only the lesson videos you need (each is 30–50 MB). Unzip the transcripts into `samples/raw/classbank/<corpus>/` (folder names `TIMSS-Math-USA`, `Curtis`) and put the videos anywhere under that folder; each video is matched to the `.cha` with the same name, and transcripts without a video are skipped.
 - For larger evaluation: the OUC-CGE classroom group engagement dataset [10] ([OSF](https://doi.org/10.17605/OSF.IO/BRD2C); adult participants; check the dataset's own terms before use). It is not auto-downloaded.
 
 ## Road to the phone
@@ -188,6 +203,7 @@ This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE)
 | PyTorch, torchvision | inference | BSD-style |
 | OpenCV, NumPy, SciPy, soundfile, lap | image, audio and assignment utilities | Apache-2.0 / BSD |
 | FastAPI, Uvicorn, python-multipart | web server | MIT / BSD / Apache-2.0 |
+| ClassBank / TalkBank corpora [11–13] (manual download, never committed) | classroom test clips with speaker-timed transcripts | CC BY-NC-SA 4.0 |
 | FFmpeg (system install, not bundled) | video/audio decoding and encoding | LGPL/GPL, depending on build |
 
 The McAdams voice anonymiser (`voice.py`) is an independent implementation of the method described in [5]. No code was copied from the VoicePrivacy Challenge baselines.
@@ -204,3 +220,6 @@ The McAdams voice anonymiser (`voice.py`) is an independent implementation of th
 8. J. Carletta et al., "The AMI Meeting Corpus: A Pre-announcement," Machine Learning for Multimodal Interaction (MLMI), 2005.
 9. F. Landini, J. Profant, M. Diez, L. Burget, "Bayesian HMM clustering of x-vector sequences (VBx) in speaker diarization: theory, implementation and analysis on standard tasks," Computer Speech & Language, 2022. arXiv:2012.14952.
 10. W. Lu, Y. Yang, R. Song, Y. Chen, T. Wang, C. Bian, "A Video Dataset for Classroom Group Engagement Recognition," Scientific Data 12, 644, 2025. doi:10.1038/s41597-025-04987-w.
+11. B. MacWhinney, "The CHILDES Project: Tools for Analyzing Talk," 3rd ed., Lawrence Erlbaum, 2000. ClassBank: https://talkbank.org/class/
+12. J. W. Stigler, R. Gallimore, J. Hiebert, "Using video surveys to compare classrooms and teaching across cultures: Examples and lessons from the TIMSS and TIMSS-R video studies," Educational Psychologist 35, 87–100, 2000.
+13. R. Lehrer, C. L. Curtis, "Why are some solids perfect?," Teaching Children Mathematics 6(5), 324, 2000.

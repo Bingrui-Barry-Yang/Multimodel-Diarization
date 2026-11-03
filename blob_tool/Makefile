@@ -3,7 +3,7 @@ HOST ?= 127.0.0.1
 PORT ?= 8000
 UV   ?= uv
 
-.PHONY: help install install-sam run dev test sample-data docker-build docker-run docker-stop clean
+.PHONY: help install install-sam run dev test sample-data all-data docker-build docker-run docker-stop clean
 
 help:
 	@echo "make install       install deps with uv (YOLO engine)"
@@ -11,7 +11,8 @@ help:
 	@echo "make run           start the UI at http://$(HOST):$(PORT) (uses Apple GPU / CUDA if present)"
 	@echo "make dev           same, with auto-reload"
 	@echo "make test          run unit + smoke tests"
-	@echo "make sample-data   download openly licensed test clips into samples/"
+	@echo "make sample-data   one short clip per dataset (AMI + each ClassBank corpus) → samples/sample/"
+	@echo "make all-data      every recording in samples/raw/, full length → samples/all/"
 	@echo "make docker-build  build the CPU-only container"
 	@echo "make docker-run    run the container at http://localhost:$(PORT)"
 	@echo "make clean         delete processed jobs in workspace/"
@@ -33,7 +34,10 @@ test: install
 	$(UV) run pytest -q
 
 sample-data: install
-	$(UV) run python scripts/fetch_samples.py
+	$(UV) run python scripts/build_samples.py
+
+all-data: install
+	$(UV) run python scripts/build_samples.py --all
 
 docker-build:
 	docker compose build

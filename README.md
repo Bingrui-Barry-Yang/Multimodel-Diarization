@@ -9,7 +9,7 @@ The goal is to study classroom interaction without keeping anything identifiable
 
 ```bash
 make run           # blob tool UI at http://127.0.0.1:8000
-make sample-data   # openly licensed test clips
+make sample-data   # one 30 s AMI/ClassBank clip per dataset (make all-data: full length)
 make test
 ```
 
