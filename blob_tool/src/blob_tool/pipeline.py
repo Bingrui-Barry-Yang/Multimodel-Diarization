@@ -29,7 +29,7 @@ MAX_HEIGHT = 1080  # downscale 4K phone footage; blobs do not need more
 
 @dataclass
 class PipelineParams:
-    engine: str = "yolo"
+    engine: str = "rfdetr"
     track: TrackParams = field(default_factory=TrackParams)
     blob: BlobParams = field(default_factory=BlobParams)
     voice: voice.VoiceParams = field(default_factory=voice.VoiceParams)
@@ -37,7 +37,7 @@ class PipelineParams:
     @classmethod
     def from_dict(cls, d: dict) -> PipelineParams:
         return cls(
-            engine=d.get("engine", "yolo"),
+            engine=d.get("engine", "rfdetr"),
             track=TrackParams(**d.get("track", {})),
             blob=BlobParams(**d.get("blob", {})),
             voice=voice.VoiceParams(**d.get("voice", {})),

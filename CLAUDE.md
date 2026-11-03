@@ -33,7 +33,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 
 - `src/blob_tool/pipeline.py`: the stages are prepare (normalise to CFR H.264, ≤1080p), track, render, voice, then mux. Progress is reported as `(stage, fraction, message)`.
 - `src/blob_tool/tracking/`: engines behind the `Tracker` protocol (`base.py`). They yield `FrameResult` with per-object bool masks.
-  - `yolo.py`: the default, YOLO26-seg with BoT-SORT using `botsort_classroom.yaml` (track_buffer 150, ReID on, `conf=0.1` on purpose).
+  - `rfdetr.py`: the default, RF-DETR-Seg + BoT-SORT from Roboflow `trackers` (Apache-2.0, CoreML-exportable). Weights go to `models/` via `RF_HOME`. Tracker thresholds were tuned on the samples (ByteTrack gave far more IDs and false positives).
+  - `yolo.py`: YOLO26-seg with BoT-SORT using `botsort_classroom.yaml` (track_buffer 150, ReID on, `conf=0.1` on purpose). AGPL.
   - `edgetam.py`: YOLO decides the IDs and EdgeTAM decides the masks, re-seeded every `chunk_frames`.
   - `sam3.py`: SAM 3 text prompt in streaming mode.
   - `__init__.py`: the engine registry. Heavy imports are lazy.
@@ -62,7 +63,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - Docker on macOS cannot use the Apple GPU, which is why `make run` is native uv and Docker is CPU-only.
 - The EdgeTAM transformers checkpoint is `yonigozlan/EdgeTAM-hf` (`facebook/EdgeTAM` is the raw `.pt`), and it needs `timm`.
 - `facebook/sam3` is gated. It needs license acceptance and `uv run hf auth login`. The official Meta repo is CUDA-only, so use the transformers implementation.
-- The repo is **AGPL-3.0** (`LICENSE`) because Ultralytics YOLO is AGPL-3.0. A closed-source app would need an enterprise license or a swap to RF-DETR/RT-DETR.
+- The repo is **AGPL-3.0** (`LICENSE`) because Ultralytics YOLO is AGPL-3.0. The phone/app path must use only the `rfdetr` engine. Removing AGPL from the repo would mean moving `ultralytics` to an extra and reseeding `edgetam` from RF-DETR (not done yet).
+- `/api/config` class names come from `rfdetr.assets.coco_classes`, so starting the UI does not load any model. RF-DETR class ids are COCO category ids (person = 1).
 - Any new model, dataset, or adapted code must be added to the *Third-party components* table and *References* in `blob_tool/README.md`, with its license verified at the source. Sample media are never committed (footage of people; most licenses forbid redistribution).
 - Headless Chrome screenshots do not paint `<video>` layers, and seek events do not fire under `--virtual-time-budget`. Check playback in a real browser.
 - ClassBank media need a free TalkBank login, so they are downloaded by hand, not by `make sample-data`. The license is CC BY-NC-SA 4.0 and every use must cite the corpus reference on its page (`CORPORA` in `build_samples.py`).

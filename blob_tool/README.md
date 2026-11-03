@@ -56,7 +56,7 @@ make run            # → open http://127.0.0.1:8000
 - Use a different port with `make run PORT=8080`.
 - To reach it from another device on your network, run `make run HOST=0.0.0.0`. Note that this exposes your videos to the network.
 
-**First processing run:** the YOLO26-seg weights (about 25 MB) download automatically into `blob_tool/models/`. That first job needs internet access and takes a few seconds longer.
+**First processing run:** the RF-DETR-Seg weights (about 130 MB for *small*) download automatically into `blob_tool/models/`. That first job needs internet access and takes a few seconds longer.
 
 ### 5. Try it with sample videos (optional)
 
@@ -65,7 +65,7 @@ make sample-data    # one 30 s clip per dataset → blob_tool/samples/sample/
 make all-data       # every downloaded recording, full length → blob_tool/samples/all/
 ```
 
-ClassBank lessons need a manual download first (see [Test data](#test-data)); without them only AMI is built. Drag any `.mp4` from `blob_tool/samples/sample/` onto the page and click **Process video**. A 20 s 1080p clip takes about a minute on an M3 Max with the default YOLO engine.
+ClassBank lessons need a manual download first (see [Test data](#test-data)); without them only AMI is built. Drag any `.mp4` from `blob_tool/samples/sample/` onto the page and click **Process video**. A 30 s sample takes about 40 s on an M3 Max with the default RF-DETR engine.
 
 ### 6. Run the tests
 
@@ -100,7 +100,7 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 |---|---|
 | `ffmpeg not found on PATH` in a job error | `brew install ffmpeg`, then restart `make run` |
 | `address already in use` | another server is on 8000: `make run PORT=8001`, or stop the other one (`lsof -i :8000`) |
-| page loads but the engine list is empty / errors | check the terminal running `make run`; the first `/api/config` call loads the YOLO model and needs internet once |
+| first job fails while loading the model | check the terminal running `make run`; the first job downloads the detector weights and needs internet once |
 | a job is stuck at "interrupted by server restart" | the server was stopped mid-job; delete it in the Jobs list and upload again |
 | EdgeTAM / SAM 3 greyed out | `make install-sam` and restart; SAM 3 additionally needs the HF login above |
 | processing is slow | check MPS (step 3); choose detector size *nano*; Docker is always CPU-only |
@@ -124,9 +124,12 @@ URLs are shareable inside your machine: `#job=<id>&mode=overlay&t=12.5&sel=3`.
 
 | Engine | What it does | Speed (M3 Max, 1080p) | Phone path |
 |---|---|---|---|
-| `yolo` (default) | [YOLO26-seg](https://docs.ultralytics.com/models/yolo26/) instance masks + BoT-SORT with ReID (`tracking/botsort_classroom.yaml`) | ~14 fps | CoreML export, ANE |
+| `rfdetr` (default) | [RF-DETR-Seg](https://github.com/roboflow/rf-detr) [14] instance masks (DINOv2 backbone) + BoT-SORT with camera-motion compensation from Roboflow [`trackers`](https://github.com/roboflow/trackers). Everything is Apache-2.0 | ~25 fps at 320×240 | `model.export(format="coreml")` → `.mlpackage` (experimental), or ONNX |
+| `yolo` | [YOLO26-seg](https://docs.ultralytics.com/models/yolo26/) instance masks + BoT-SORT with ReID (`tracking/botsort_classroom.yaml`). AGPL-3.0, so not usable in a closed-source app | ~14 fps at 1080p | CoreML export, ANE |
 | `edgetam` | YOLO tracks decide *who*. [EdgeTAM](https://huggingface.co/papers/2501.07256) (on-device SAM 2, CVPR 2025) decides *which pixels*, re-seeded every `chunk_frames` | ~2–3 fps | EdgeTAM runs at ~16 fps on iPhone 15 Pro Max |
 | `sam3` | [SAM 3](https://ai.meta.com/research/publications/sam-3-segment-anything-with-concepts/) text-prompt video tracking ("person", "chair", …), streaming mode | slow | no (server-class model) |
+
+On the 30 s samples RF-DETR + BoT-SORT gives 5 / 35 / 19 IDs (AMI / Curtis / TIMSS) against YOLO's 5 / 43 / 20, with similar per-frame coverage. `edgetam` still uses YOLO for its IDs.
 
 SAM 3 weights are gated. Accept the license at <https://huggingface.co/facebook/sam3>, then run `uv run hf auth login`.
 
@@ -182,20 +185,23 @@ samples/
 ## Road to the phone
 
 The goal is to record live and save only the processed output.
-1. Export `yolo26n-seg` with `model.export(format="coreml", nms=True)` and run it on the Neural Engine. Port BoT-SORT/ByteTrack and the stitching step to Swift (they are a few hundred lines of Kalman filtering and IoU matching).
+1. Export RF-DETR-Seg (`pip install "rfdetr[coreml]"`, then `RFDETRSegNano().export(format="coreml", coreml_precision="float16")`) and run it on the Neural Engine. Port BoT-SORT and the stitching step to Swift (they are a few hundred lines of Kalman filtering and IoU matching).
 2. Optionally add EdgeTAM via CoreML for better masks.
 3. Render blobs with Metal/Core Graphics from the polygons, and write only blob frames to `AVAssetWriter`. Camera frames never touch disk.
 4. Apply McAdams per audio buffer in an `AVAudioEngine` tap. It is frame-based with 50 % overlap-add, so it streams with 20 ms of latency.
 
 ## License
 
-This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE) at the repo root), because it builds on Ultralytics YOLO, which is AGPL-3.0. If you deploy a modified version as a network service, you must offer its source to the users of that service. A closed-source product would need an [Ultralytics Enterprise License](https://www.ultralytics.com/license) or a swap to a permissively licensed detector (e.g. RF-DETR, RT-DETR).
+This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE) at the repo root), because it builds on Ultralytics YOLO, which is AGPL-3.0. If you deploy a modified version as a network service, you must offer its source to the users of that service. The default `rfdetr` engine and its tracker are Apache-2.0, so a closed-source phone app can be built on that path alone. The repo stays AGPL while it ships the `yolo` engine (and `edgetam`, which seeds from YOLO).
 
 ### Third-party components
 
 | Component | Used for | License |
 |---|---|---|
 | [Ultralytics](https://github.com/ultralytics/ultralytics) + YOLO26-seg weights [1] | detection, segmentation, BoT-SORT tracking | AGPL-3.0 |
+| [RF-DETR](https://github.com/roboflow/rf-detr) [14] (`rfdetr`, RF-DETR-Seg N–L weights) | default detection + segmentation | Apache-2.0 (only the Seg and N–L detection weights; the PML 1.0 "plus" models are not used) |
+| [Roboflow trackers](https://github.com/roboflow/trackers) (clean-room BoT-SORT [2]) | default tracking | Apache-2.0 |
+| [supervision](https://github.com/roboflow/supervision) | detection containers for RF-DETR / trackers | MIT |
 | `src/blob_tool/tracking/botsort_classroom.yaml` | tracker settings, adapted from Ultralytics' `botsort.yaml` | AGPL-3.0 |
 | [EdgeTAM](https://github.com/facebookresearch/EdgeTAM) [3] (weights via [`yonigozlan/EdgeTAM-hf`](https://huggingface.co/yonigozlan/EdgeTAM-hf)) | optional mask engine | Apache-2.0 |
 | [SAM 3](https://github.com/facebookresearch/sam3) [4] | optional engine; weights are downloaded by each user after accepting Meta's license | SAM License |
@@ -223,3 +229,4 @@ The McAdams voice anonymiser (`voice.py`) is an independent implementation of th
 11. B. MacWhinney, "The CHILDES Project: Tools for Analyzing Talk," 3rd ed., Lawrence Erlbaum, 2000. ClassBank: https://talkbank.org/class/
 12. J. W. Stigler, R. Gallimore, J. Hiebert, "Using video surveys to compare classrooms and teaching across cultures: Examples and lessons from the TIMSS and TIMSS-R video studies," Educational Psychologist 35, 87–100, 2000.
 13. R. Lehrer, C. L. Curtis, "Why are some solids perfect?," Teaching Children Mathematics 6(5), 324, 2000.
+14. I. Robinson, P. Robicheaux, M. Popov, D. Ramanan, N. Peri, "RF-DETR: Neural Architecture Search for Real-Time Detection Transformers," ICLR 2026. arXiv:2511.09554.

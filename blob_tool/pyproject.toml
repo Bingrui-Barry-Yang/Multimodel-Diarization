@@ -17,6 +17,9 @@ dependencies = [
     "lap>=0.5",
     "torch>=2.4",
     "torchvision>=0.19",
+    "rfdetr>=1.4",
+    "trackers>=2.6.1",
+    "supervision>=0.31.3",
 ]
 
 [project.optional-dependencies]

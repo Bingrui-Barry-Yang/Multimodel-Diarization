@@ -7,8 +7,12 @@ import importlib.util
 from .base import FrameResult, TrackedObject, Tracker, TrackParams
 
 ENGINES = {
+    "rfdetr": {
+        "label": "RF-DETR-Seg + BoT-SORT (Apache-2.0, CoreML-exportable)",
+        "requires": "rfdetr",
+    },
     "yolo": {
-        "label": "YOLO26-seg + BoT-SORT (fast, phone-ready)",
+        "label": "YOLO26-seg + BoT-SORT (fast, AGPL-3.0)",
         "requires": None,
     },
     "edgetam": {
@@ -33,6 +37,10 @@ def available_engines() -> list[dict]:
 
 
 def get_tracker(name: str) -> Tracker:
+    if name == "rfdetr":
+        from .rfdetr import RfDetrTracker
+
+        return RfDetrTracker()
     if name == "yolo":
         from .yolo import YoloTracker
 

@@ -32,12 +32,12 @@ def _job_or_404(job_id: str):
 
 @app.get("/api/config")
 def config() -> dict:
-    from .tracking.yolo import class_names
+    from .tracking.rfdetr import coco_names
 
     return {
         "version": __version__,
         "engines": available_engines(),
-        "classes": class_names(),
+        "classes": list(coco_names().values()),
         "styles": list(STYLES),
     }
 
