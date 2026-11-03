@@ -3,7 +3,8 @@ import json
 import cv2
 import numpy as np
 
-from blob_tool.render import BACKGROUND_BGR, BlobParams, TrackStore, color_for, draw_blobs, mask_to_polygons
+from blob_tool.render import (BACKGROUND_BGR, BlobParams, TrackStore, color_for, draw_blobs, draw_frame,
+                              mask_to_polygons)
 
 
 def disk(h, w, cx, cy, r):
@@ -68,3 +69,27 @@ def test_far_apart_tracks_are_not_stitched():
         store.add_frame([(2, "person", 0.9, mask_to_polygons(disk(480, 640, 540, 240, 40), BlobParams()))])
     store.finalize(min_track_seconds=0.5, stitch_gap_seconds=2.0)
     assert len(store.meta) == 2
+
+
+def test_pose_frames_have_no_source_pixels():
+    """Pose-only and blob+pose frames contain only the background and colours derived from the blob colour."""
+    store = TrackStore(320, 240, 25)
+    store.add_frame([(7, "person", 0.9, mask_to_polygons(disk(240, 320, 160, 120, 40), BlobParams()))])
+    store.finalize(0)
+    k = np.column_stack([np.linspace(140, 180, 17), np.linspace(100, 140, 17), np.ones(17)])  # inside the blob
+    k[0, 2] = 0.1  # below min_score: not drawn
+    bg = np.array(BACKGROUND_BGR, float)
+    blob = np.array(color_for(0)[::-1], float)
+    tint = np.floor(blob + (255 - blob) * 0.7)  # draw_skeletons truncates to int
+    for on_blobs, colours in ((False, [blob]), (True, [blob, tint])):
+        img = draw_frame(store, 0, [[(1, k)]], blobs=on_blobs).reshape(-1, 3).astype(float)
+        drawn = (np.abs(img - bg).sum(1) > 6)
+        assert drawn.any()
+        # every pixel lies on a segment between known colours (anti-aliasing mixes neighbours)
+        anchors = [bg, *colours]
+        best = np.full(len(img), np.inf)
+        for i, a in enumerate(anchors):
+            for b in anchors[i + 1:]:
+                t = np.clip(((img - a) @ (b - a)) / ((b - a) @ (b - a)), 0, 1)
+                best = np.minimum(best, np.abs(img - (a + np.outer(t, b - a))).max(1))
+        assert best.max() <= 2.0

@@ -49,8 +49,22 @@ class RedBlobTracker:
         cap.release()
 
 
+def fake_poses(video, store, params, progress):
+    """A stick figure centred on every blob, all keypoints confident."""
+    rows = []
+    for row in store.frames:
+        poses = []
+        for oid, polys in row:
+            c = np.vstack(polys).mean(0)
+            k = np.column_stack([c + np.linspace(-10, 10, 17)[:, None], np.ones(17)])
+            poses.append((oid, k))
+        rows.append(poses)
+    return rows
+
+
 def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
+    monkeypatch.setattr(pipeline, "estimate_poses", fake_poses)
     stages = []
     out = tmp_path / "job"
     result = pipeline.run(synthetic_video, out, pipeline.PipelineParams(),
@@ -58,8 +72,15 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
 
     assert result["objects"] == 1 and result["has_audio"]
     assert stages[0] == "prepare" and stages[-1] == "mux"
-    for name in ("original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json"):
+    for name in ("original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json",
+                 "poses.json", "pose.mp4", "blobpose.mp4"):
         assert (out / name).exists(), name
+    assert not list(out.glob("*_raw.mp4"))
+    assert media.probe(out / "pose.mp4").has_audio and result["poses"]
+
+    poses = json.loads((out / "poses.json").read_text())
+    assert len(poses["frames"]) == N and len(poses["keypoints"]) == 17
+    assert all(len(p) == 1 + 17 * 3 and p[0] == 1 for row in poses["frames"] for p in row)
 
     info = media.probe(out / "processed.mp4")
     assert (info.width, info.height) == (W, H) and info.has_audio
@@ -74,3 +95,13 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     ok, frame = cap.read()
     cap.release()
     assert ok and frame.mean() < 120
+
+
+def test_pose_can_be_turned_off(tmp_path, synthetic_video, monkeypatch):
+    monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
+    monkeypatch.setattr(pipeline, "estimate_poses", lambda *a: pytest.fail("pose ran while disabled"))
+    out = tmp_path / "job"
+    result = pipeline.run(synthetic_video, out, pipeline.PipelineParams.from_dict({"pose": {"enabled": False}}),
+                          lambda *a: None)
+    assert not result["poses"] and (out / "processed.mp4").exists()
+    assert not (out / "pose.mp4").exists() and not (out / "poses.json").exists()

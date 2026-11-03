@@ -189,9 +189,10 @@ def _centroid(polys: list[np.ndarray]) -> tuple[float, float]:
     return float(pts[:, 0].mean()), float(pts[:, 1].mean())
 
 
-def draw_blobs(store: TrackStore, index: int) -> np.ndarray:
-    img = np.empty((store.height, store.width, 3), np.uint8)
-    img[:] = BACKGROUND_BGR
+def draw_blobs(store: TrackStore, index: int, img: np.ndarray | None = None) -> np.ndarray:
+    if img is None:
+        img = np.empty((store.height, store.width, 3), np.uint8)
+        img[:] = BACKGROUND_BGR
     row = store.frames[index]
     # big blobs first so nearer/smaller people are not hidden behind them
     ordered = sorted(row, key=lambda r: -sum(cv2.contourArea(p.astype(np.int32)) for p in r[1]))
@@ -201,14 +202,46 @@ def draw_blobs(store: TrackStore, index: int) -> np.ndarray:
     return img
 
 
-def render_video(store: TrackStore, dst: Path, progress=None) -> None:
+def draw_skeletons(img: np.ndarray, row: list[tuple[int, np.ndarray]], min_score: float, on_blobs: bool) -> np.ndarray:
+    """Stick figures from keypoints only: in the blob colour, or a light tint of it when drawn over blobs."""
+    from .pose import SKELETON
+
+    t = max(1, round(min(img.shape[:2]) / 240))
+    for oid, k in row:
+        rgb = np.array(color_for(oid - 1), float)
+        if on_blobs:
+            rgb = rgb + (255 - rgb) * 0.7
+        bgr = tuple(int(c) for c in rgb[::-1])
+        ok = k[:, 2] >= min_score
+        pts = k[:, :2].round().astype(np.int32)
+        for a, b in SKELETON:
+            if ok[a] and ok[b]:
+                cv2.line(img, tuple(pts[a]), tuple(pts[b]), bgr, t, cv2.LINE_AA)
+        for p in pts[ok]:
+            cv2.circle(img, tuple(p), t + 1, bgr, -1, cv2.LINE_AA)
+    return img
+
+
+def draw_frame(store: TrackStore, index: int, poses=None, blobs: bool = True, min_score: float = 0.3) -> np.ndarray:
+    img = np.empty((store.height, store.width, 3), np.uint8)
+    img[:] = BACKGROUND_BGR
+    if blobs:
+        draw_blobs(store, index, img)
+    if poses is not None and index < len(poses):
+        draw_skeletons(img, poses[index], min_score, on_blobs=blobs)
+    return img
+
+
+def render_video(store: TrackStore, dst: Path, progress=None, poses=None, blobs: bool = True,
+                 min_score: float = 0.3) -> None:
+    """Blob-only (default), pose-only (``blobs=False``) or blob + pose video, drawn from polygons/keypoints."""
     writer = cv2.VideoWriter(str(dst), cv2.VideoWriter_fourcc(*"mp4v"), store.fps, (store.width, store.height))
     if not writer.isOpened():
         raise RuntimeError("could not open video writer")
     n = len(store.frames)
     try:
         for i in range(n):
-            writer.write(draw_blobs(store, i))
+            writer.write(draw_frame(store, i, poses, blobs, min_score))
             if progress and i % 10 == 0:
                 progress((i + 1) / n, f"rendering frame {i + 1}/{n}")
     finally:

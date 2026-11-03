@@ -31,7 +31,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 
 ## Layout (`blob_tool/`)
 
-- `src/blob_tool/pipeline.py`: the stages are prepare (normalise to CFR H.264, ≤1080p), track, render, voice, then mux. Progress is reported as `(stage, fraction, message)`.
+- `src/blob_tool/pipeline.py`: the stages are prepare (normalise to CFR H.264, ≤1080p), track, pose, render, voice, then mux. Render writes `processed.mp4`, plus `pose.mp4` and `blobpose.mp4` when pose is on. Progress is reported as `(stage, fraction, message)`.
 - `src/blob_tool/tracking/`: engines behind the `Tracker` protocol (`base.py`). They yield `FrameResult` with per-object bool masks.
   - `rfdetr.py`: the default, RF-DETR-Seg + BoT-SORT from Roboflow `trackers` (Apache-2.0, CoreML-exportable). Weights go to `models/` via `RF_HOME`. Tracker thresholds were tuned on the samples (ByteTrack gave far more IDs and false positives).
   - `yolo.py`: YOLO26-seg with BoT-SORT using `botsort_classroom.yaml` (track_buffer 150, ReID on, `conf=0.1` on purpose). AGPL.
@@ -42,15 +42,16 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
   - `mask_to_polygons` smooths on the bbox crop at ≤480 px (`WORK_SIZE`), which matters for speed.
   - `TrackStore` stitches broken tracks, drops short ones and renumbers IDs.
   - It also writes `tracks.json` and draws the blob video **from polygons only**.
+- `src/blob_tool/pose.py`: top-down RTMPose-m (rtmlib/ONNX) on each tracked blob's box, so skeletons share the blob ID and colour. Writes `poses.json`. Weights are in `models/rtmlib/` (via `TORCH_HOME`).
 - `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α) + optional pitch shift.
 - `src/blob_tool/jobs.py`: job dirs in `workspace/<id>/`, one sequential worker thread, `PUBLIC_FILES` allow-list.
 - `src/blob_tool/app.py`: FastAPI. `/api/config`, `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, plus the static `web/`.
-- `web/`: vanilla JS/CSS with no build step. A canvas overlay draws polygons from `tracks.json`. Deep links take the form `#job=<id>&mode=overlay&t=4&sel=3`.
+- `web/`: vanilla JS/CSS with no build step. A canvas overlay draws polygons from `tracks.json` (and skeletons from `poses.json` in Overlay mode). The Pose / Blobs+Pose modes swap the processed `<video>` source to `pose.mp4` / `blobpose.mp4`. Deep links take the form `#job=<id>&mode=overlay&t=4&sel=3`.
 - `scripts/build_samples.py`: downloads AMI into `samples/raw/ami/`, pairs ClassBank videos with their `.cha` in `samples/raw/classbank/<corpus>/`, and writes `samples/<sample|all>/<dataset>/[<corpus>/]<recording>/` with `.mp4` + `.rttm` (+ `.transcript.tsv`) and a `SOURCES.md` per mode.
 
 ## Invariants — do not break
 
-- **No original pixels in outputs.** Blob frames are drawn only from simplified polygons on `BACKGROUND_BGR`. `tests/test_render.py` asserts this. `STAGE_BG` in `web/app.js` and `--stage-bg` in `style.css` must match `BACKGROUND_BGR`.
+- **No original pixels in outputs.** Blob and pose frames are drawn only from simplified polygons and keypoints on `BACKGROUND_BGR`. `tests/test_render.py` asserts this. `STAGE_BG` in `web/app.js` and `--stage-bg` in `style.css` must match `BACKGROUND_BGR`.
 - **One fixed α per recording** for the voice transform. This keeps speakers distinguishable for diarization, so do not randomise it per utterance.
 - **Originals are deletable.** The raw upload is always deleted after processing. `original.mp4`/`original.wav` exist only for before/after comparison and are removed by "discard original".
 - **Never commit media or weights.** `workspace/`, `samples/`, `models/`, `*.pt` are gitignored. Footage of children must never enter git.
@@ -69,6 +70,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - Headless Chrome screenshots do not paint `<video>` layers, and seek events do not fire under `--virtual-time-budget`. Check playback in a real browser.
 - ClassBank media need a free TalkBank login, so they are downloaded by hand, not by `make sample-data`. The license is CC BY-NC-SA 4.0 and every use must cite the corpus reference on its page (`CORPORA` in `build_samples.py`).
 - Pexels clips were dropped: they have no usable classroom audio and no ground truth.
+- One-stage RTMO (rtmlib) misses most small students in low-res clips, and its default `score_thr` of 0.7 is far too high. That is why pose is top-down on the tracker boxes.
+- `rtmlib` pulls in `opencv-python` and `opencv-contrib-python` next to `opencv-python-headless`. They are all the same version, so `cv2` works, but keep them in step if you pin OpenCV.
 - AMI `ES2002a` is a 352×288 fisheye. Track fragmentation there (~24 IDs for 4 people) comes from the source quality, not a pipeline bug.
 
 ## Conventions
@@ -76,7 +79,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - Python ≥3.11, managed by uv. Use `uv run …`, never bare pip.
 - Match the existing style: dataclasses for params (`TrackParams`, `BlobParams`, `VoiceParams`, built by `PipelineParams.from_dict`), short module docstrings, few comments.
 - New tracking engines implement `Tracker.run(...)` and register in `tracking/__init__.py` with a lazy import.
-- Tests use a fake tracker (`tests/test_pipeline_smoke.py`), so they stay download-free.
+- Tests use a fake tracker and a fake pose estimator (`tests/test_pipeline_smoke.py` patches `pipeline.get_tracker` and `pipeline.estimate_poses`), so they stay download-free.
 
 ## Workflow
 

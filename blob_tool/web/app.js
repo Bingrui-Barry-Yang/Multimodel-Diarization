@@ -2,7 +2,11 @@
 
 const $ = (id) => document.getElementById(id);
 const STAGE_BG = "#121418"; // must match render.BACKGROUND_BGR
-const STAGES = ["prepare", "track", "render", "voice", "mux"];
+const STAGES = ["prepare", "track", "pose", "render", "voice", "mux"];
+// which rendered video the processed layer shows in each mode
+const PROC_FILE = { pose: "pose.mp4", blobpose: "blobpose.mp4" };
+const NEEDS_ORIGINAL = ["original", "overlay", "split"];
+const NEEDS_POSE = ["pose", "blobpose"];
 
 const state = {
   config: null,
@@ -13,6 +17,7 @@ const state = {
   // viewer
   job: null,
   tracks: null,
+  poses: null,
   mode: "blobs",
   audio: "altered",
   selected: null,
@@ -106,6 +111,7 @@ function collectParams() {
       text_prompt: state.classes.join(", "),
     },
     blob: { style: $("style").value, smooth: parseFloat($("smooth").value) },
+    pose: { enabled: $("pose").checked },
     voice: { mcadams_alpha: parseFloat($("alpha").value), pitch_semitones: parseFloat($("pitch").value) },
   };
 }
@@ -254,25 +260,28 @@ async function loadViewer(job) {
   $("viewer-title").textContent = job.filename;
   const r = job.result;
   $("viewer-meta").textContent =
-    `${r.width}×${r.height} · ${r.fps.toFixed(2)} fps · ${fmtTime(r.duration)} · engine ${job.params.engine || "yolo"}` +
+    `${r.width}×${r.height} · ${r.fps.toFixed(2)} fps · ${fmtTime(r.duration)} · engine ${job.params.engine || "rfdetr"}` +
     (state.hasOriginal ? "" : " · original deleted");
 
   state.tracks = await api(fileUrl(job, "tracks.json"));
+  state.hasPose = job.files.includes("poses.json");
+  state.poses = state.hasPose ? await api(fileUrl(job, "poses.json")) : null;
   stage.style.aspectRatio = `${r.width} / ${r.height}`;
   // keep tall (phone) videos from overflowing: width follows the max height
   stage.style.maxWidth = `calc((100vh - 230px) * ${r.width / r.height})`;
 
   vProc.src = fileUrl(job, "processed.mp4");
+  vProc.dataset.file = "processed.mp4";
   if (state.hasOriginal) vOrig.src = fileUrl(job, "original.mp4");
   else vOrig.removeAttribute("src");
   vOrig.load(); vProc.load();
 
-  for (const b of document.querySelectorAll("#mode-seg button")) b.disabled = !state.hasOriginal && b.dataset.mode !== "blobs";
+  for (const b of document.querySelectorAll("#mode-seg button")) b.disabled = !modeAvailable(b.dataset.mode);
   for (const b of document.querySelectorAll("#audio-seg button")) {
     b.disabled = (b.dataset.audio === "original" && !(state.hasOriginal && r.has_audio)) ||
                  (b.dataset.audio === "altered" && !r.has_audio);
   }
-  if (!state.hasOriginal) state.mode = "blobs";
+  if (!modeAvailable(state.mode)) state.mode = "blobs";
   if (!r.has_audio) state.audio = "mute";
   else if (state.audio === "original" && !state.hasOriginal) state.audio = "altered";
 
@@ -280,6 +289,10 @@ async function loadViewer(job) {
   $("dl-tracks").href = fileUrl(job, "tracks.json");
   $("dl-audio").href = fileUrl(job, "altered.wav");
   $("dl-audio").setAttribute("aria-disabled", String(!job.files.includes("altered.wav")));
+  for (const [id, name] of [["dl-pose", "pose.mp4"], ["dl-blobpose", "blobpose.mp4"], ["dl-poses", "poses.json"]]) {
+    $(id).href = fileUrl(job, name);
+    $(id).hidden = !job.files.includes(name);
+  }
   $("discard-btn").hidden = !state.hasOriginal;
 
   renderObjectList();
@@ -294,7 +307,7 @@ async function loadViewer(job) {
 function applyDeepLink() {
   const p = new URLSearchParams(location.hash.slice(1));
   const mode = p.get("mode");
-  if (["original", "blobs", "overlay", "split"].includes(mode) && (state.hasOriginal || mode === "blobs")) state.mode = mode;
+  if (["original", "blobs", "pose", "blobpose", "overlay", "split"].includes(mode) && modeAvailable(mode)) state.mode = mode;
   const sel = parseInt(p.get("sel"), 10);
   if (state.tracks.objects.some((o) => o.id === sel)) selectObject(sel);
   const t = parseFloat(p.get("t"));
@@ -312,14 +325,32 @@ function frameAt(t) {
   return Math.max(0, Math.min(n - 1, Math.floor(t * state.tracks.fps + 1e-3)));
 }
 
+function modeAvailable(mode) {
+  return !(NEEDS_ORIGINAL.includes(mode) && !state.hasOriginal) && !(NEEDS_POSE.includes(mode) && !state.hasPose);
+}
+
+// swap the processed layer between blob / pose / blob+pose renders, keeping time and play state
+function setProcFile(name) {
+  if (vProc.dataset.file === name) return;
+  const t = master().currentTime, playing = !master().paused;
+  vProc.dataset.file = name;
+  vProc.src = fileUrl(state.job, name);
+  vProc.addEventListener("loadedmetadata", () => {
+    vProc.currentTime = t;
+    if (playing) playBoth();
+  }, { once: true });
+}
+
 function setMode(mode) {
   state.mode = mode;
   for (const b of document.querySelectorAll("#mode-seg button")) b.classList.toggle("active", b.dataset.mode === mode);
-  vOrig.style.visibility = (mode === "blobs" || !state.hasOriginal) ? "hidden" : "visible";
+  setProcFile(PROC_FILE[mode] || "processed.mp4");
+  vOrig.style.visibility = (NEEDS_ORIGINAL.includes(mode) && state.hasOriginal) ? "visible" : "hidden";
   vProc.style.visibility = (mode === "original" || mode === "overlay") ? "hidden" : "visible";
   $("split-handle").hidden = mode !== "split";
   applySplit();
-  $("stage-badge").textContent = { original: "ORIGINAL", blobs: "PROCESSED", overlay: "OVERLAY", split: "ORIGINAL ◀ ▶ PROCESSED" }[mode];
+  $("stage-badge").textContent = { original: "ORIGINAL", blobs: "PROCESSED", pose: "POSE", blobpose: "BLOBS + POSE",
+                                   overlay: "OVERLAY", split: "ORIGINAL ◀ ▶ PROCESSED" }[mode];
   draw(true);
 }
 
@@ -392,7 +423,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") { e.preventDefault(); stepFrames(e.shiftKey ? -10 : -1); }
   else if (e.key === "ArrowRight") { e.preventDefault(); stepFrames(e.shiftKey ? 10 : 1); }
   else if (e.key === "Escape") selectObject(null);
-  else if ("1234".includes(e.key)) {
+  else if ("123456".includes(e.key)) {
     const b = document.querySelectorAll("#mode-seg button")[+e.key - 1];
     if (b && !b.disabled) setMode(b.dataset.mode);
   }
@@ -449,7 +480,7 @@ function draw(force = false) {
     const meta = objMeta(id);
     const hidden = state.hidden.has(id);
     tracePolys(polys);
-    if (mode === "blobs" || mode === "split") {
+    if (mode === "blobs" || mode === "split" || NEEDS_POSE.includes(mode)) {
       // the rendered video already shows blobs; paint over hidden / de-emphasised ones
       if (mode === "split") { ctx.save(); ctx.beginPath(); ctx.rect(splitX, 0, canvas.width, canvas.height); ctx.clip(); tracePolys(polys); }
       if (hidden) {
@@ -464,6 +495,8 @@ function draw(force = false) {
       ctx.strokeStyle = hexA(meta.color, Math.min(1, a + 0.3)); ctx.lineWidth = 1.5 * dpr; ctx.stroke();
     }
   }
+
+  if (mode === "overlay" && state.poses) drawSkeletons(frame);
 
   // selection outline + label, in every mode
   const selRow = rows.find((r) => r[0] === sel);
@@ -484,6 +517,31 @@ function draw(force = false) {
   }
 
   updateLiveDots(rows);
+}
+
+// overlay mode: stick figures from poses.json over the original, in each blob's colour
+function drawSkeletons(frame) {
+  const W = canvas.width, H = canvas.height, dpr = window.devicePixelRatio || 1;
+  const sk = state.poses.skeleton;
+  for (const [id, ...k] of state.poses.frames[frame] || []) {
+    if (state.hidden.has(id)) continue;
+    const meta = objMeta(id);
+    const a = state.selected === null || state.selected === id ? 1 : 0.25;
+    const ok = (i) => k[i * 3 + 2] >= 0.3;
+    ctx.strokeStyle = ctx.fillStyle = meta ? hexA(meta.color, a) : `rgba(255,255,255,${a})`;
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    for (const [p, q] of sk) {
+      if (!ok(p) || !ok(q)) continue;
+      ctx.moveTo(k[p * 3] * W, k[p * 3 + 1] * H);
+      ctx.lineTo(k[q * 3] * W, k[q * 3 + 1] * H);
+    }
+    ctx.stroke();
+    for (let i = 0; i < 17; i++) {
+      if (!ok(i)) continue;
+      ctx.beginPath(); ctx.arc(k[i * 3] * W, k[i * 3 + 1] * H, 2.5 * dpr, 0, 2 * Math.PI); ctx.fill();
+    }
+  }
 }
 
 function tick() {
@@ -632,7 +690,7 @@ new ResizeObserver(drawPresence).observe($("presence"));
 
 /* privacy: delete originals */
 $("discard-btn").onclick = async () => {
-  if (!confirm("Permanently delete the original video and audio for this job? Only the blob video, altered audio and tracks remain.")) return;
+  if (!confirm("Permanently delete the original video and audio for this job? Only the blob and pose videos, altered audio and tracks remain.")) return;
   try {
     await api(`/api/jobs/${state.job.id}/discard-original`, { method: "POST" });
     await refreshJobs();

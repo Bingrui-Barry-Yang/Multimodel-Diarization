@@ -1,11 +1,12 @@
 # Blob Tool
 
-A privacy filter for classroom video. It turns every person (or any other object class you choose) into a **coloured blob that keeps its colour across time**, and it **alters the voices**. The output contains no original pixels and no original voice, but it keeps *who is where, who moves, and who speaks when*. That is the signal a downstream diarization model needs.
+A privacy filter for classroom video. It turns every person (or any other object class you choose) into a **coloured blob that keeps its colour across time**, optionally draws a **stick-figure pose** for each blob, and it **alters the voices**. The output contains no original pixels and no original voice, but it keeps *who is where, who moves, and who speaks when*. That is the signal a downstream diarization model needs.
 
 ```
 raw video ──► normalise (CFR H.264) ──► detect + segment + track ──► smooth & simplify outlines ──► processed.mp4
           └─► audio 16 kHz mono ──► McAdams formant shift (+ optional pitch) ───────────────────────┘  (blobs + altered voice)
                                                                                 tracks.json (per-frame polygons, IDs)
+                     tracked boxes ──► RTMPose (top-down) ──► poses.json ──► pose.mp4, blobpose.mp4 (+ altered voice)
 ```
 
 ## Setup
@@ -110,12 +111,12 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 
 1. Drop a video (or click to choose one). Pick the objects to blob (default `person`), the blob style and the voice settings, then click **Process**.
 2. When it finishes:
-   - **Original / Blobs / Overlay / Split** (keys `1`–`4`) switch the view. Split has a draggable before/after divider.
+   - **Original / Blobs / Pose / Blobs+Pose / Overlay / Split** (keys `1`–`6`) switch the view. Pose and Blobs+Pose play the rendered stick-figure videos; Overlay draws blobs and skeletons over the original. Split has a draggable before/after divider.
    - **Seek bar**: the strip behind it shows how many objects are visible over time. The selected object's presence is drawn as a coloured line on top.
    - **Objects panel**: click a row, or click a blob in the video, to select it. The other blobs dim, its outline and label are drawn, and the player jumps to it if it is off-screen. 👁 hides a blob.
    - **Audio**: altered, original or mute.
    - `space` plays and pauses, `←`/`→` step one frame (with `shift`, ten frames), `esc` deselects.
-3. **Downloads**: processed video (blobs + altered voice), altered wav, and `tracks.json`.
+3. **Downloads**: processed video (blobs + altered voice), altered wav, `tracks.json`, and, with pose on, the pose and blobs+pose videos and `poses.json`.
 4. **Delete original files** removes the only copies of the original pixels and voice (`original.mp4`, `original.wav`). The checkbox *Discard original after processing* does this automatically, which matches how the phone version will behave. The raw upload is always deleted after processing.
 
 URLs are shareable inside your machine: `#job=<id>&mode=overlay&t=12.5&sel=3`.
@@ -142,6 +143,12 @@ After tracking, `render.TrackStore` **stitches** tracks. A track that disappears
 
 Blobs are drawn only from simplified polygons onto a solid background, so the original pixels cannot leak through. `tests/test_render.py` checks that every output pixel is background, blob colour, or an anti-aliased mix of the two.
 
+## Pose estimation
+
+With *Pose estimation* on (the default), `pose.py` runs **RTMPose-m** [15] through [rtmlib](https://github.com/Tau-J/rtmlib) (ONNX Runtime, no mmcv) on each tracked blob's bounding box. This gives 17 COCO keypoints per blob, with the same ID and colour as the blob. The top-down approach was chosen after testing: the one-stage multi-person model RTMO found only about a third of the students in the 320×240 ClassBank clips, while RTMPose on the tracker's boxes gives a skeleton for every blob. It costs about 7 ms per person per frame on an M3 Max (MPS), so a 30 s clip with ~17 students adds about 2 minutes. Weights (about 50 MB) download into `blob_tool/models/rtmlib/` on first use.
+
+Skeletons are drawn from keypoints only (`render.draw_skeletons`): in the blob's colour on the plain background (`pose.mp4`), or as a light tint of it on top of the blobs (`blobpose.mp4`). Keypoints below `min_score` (0.3) are not drawn. The test suite checks that these frames contain no source pixels either.
+
 ## Voice alteration
 
 `voice.py` implements the **McAdams-coefficient** anonymiser, the signal-processing baseline of the [VoicePrivacy Challenge](https://www.voiceprivacychallenge.org/). Each 20 ms frame is LPC-analysed, every formant pole angle φ becomes φ^α, and the residual is re-filtered. It needs no training data, runs faster than real time on a CPU, and is simple enough for AVAudioEngine/Core Audio on a phone.
@@ -155,6 +162,8 @@ The **same α is used for the whole recording**, so all speakers move through th
 | `processed.mp4` | blob-only video + altered audio | ✅ |
 | `altered.wav` | altered audio, 16 kHz mono | ✅ |
 | `tracks.json` | `objects[]` (id, label, colour, first/last frame) and `frames[i] = [[id, [x0,y0,x1,y1,…normalised], …], …]` | ✅ |
+| `poses.json` | `keypoints` (17 COCO names), `skeleton` (index pairs) and `frames[i] = [[id, x0,y0,s0, …, x16,y16,s16], …]`, x/y normalised | ✅ (body keypoints, no pixels) |
+| `pose.mp4`, `blobpose.mp4` | stick figures only / blobs + stick figures, with altered audio | ✅ |
 | `original.mp4`, `original.wav` | normalised copy of the input, kept only for before/after comparison | ❌ deleted by "discard original" |
 
 `tracks.json` is the intended input for the next stage: a blob-only multimodal or diarization model. It lets you test whether a model can still tell who is speaking when all it gets is blobs.
@@ -187,8 +196,9 @@ samples/
 The goal is to record live and save only the processed output.
 1. Export RF-DETR-Seg (`pip install "rfdetr[coreml]"`, then `RFDETRSegNano().export(format="coreml", coreml_precision="float16")`) and run it on the Neural Engine. Port BoT-SORT and the stitching step to Swift (they are a few hundred lines of Kalman filtering and IoU matching).
 2. Optionally add EdgeTAM via CoreML for better masks.
-3. Render blobs with Metal/Core Graphics from the polygons, and write only blob frames to `AVAssetWriter`. Camera frames never touch disk.
-4. Apply McAdams per audio buffer in an `AVAudioEngine` tap. It is frame-based with 50 % overlap-add, so it streams with 20 ms of latency.
+3. Pose: either Apple's Vision `VNDetectHumanBodyPoseRequest` (built in, 2D, several people per frame) or RTMPose exported to CoreML ([rtmlib-coreml](https://github.com/Kinetix-ML/rtmlib-coreml)), run on the tracker's boxes as here.
+4. Render blobs with Metal/Core Graphics from the polygons, and write only blob frames to `AVAssetWriter`. Camera frames never touch disk.
+5. Apply McAdams per audio buffer in an `AVAudioEngine` tap. It is frame-based with 50 % overlap-add, so it streams with 20 ms of latency.
 
 ## License
 
@@ -202,6 +212,9 @@ This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE)
 | [RF-DETR](https://github.com/roboflow/rf-detr) [14] (`rfdetr`, RF-DETR-Seg N–L weights) | default detection + segmentation | Apache-2.0 (only the Seg and N–L detection weights; the PML 1.0 "plus" models are not used) |
 | [Roboflow trackers](https://github.com/roboflow/trackers) (clean-room BoT-SORT [2]) | default tracking | Apache-2.0 |
 | [supervision](https://github.com/roboflow/supervision) | detection containers for RF-DETR / trackers | MIT |
+| [rtmlib](https://github.com/Tau-J/rtmlib) | running RTMPose without mmcv/mmpose | Apache-2.0 |
+| RTMPose-m Body7 ONNX weights from [MMPose](https://github.com/open-mmlab/mmpose) [15] | pose estimation | Apache-2.0 (trained on Body7 = COCO, AI Challenger, CrowdPose, MPII, sub-JHMDB, Halpe, PoseTrack18; check those datasets' terms before commercial use) |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | pose inference (CoreML execution provider on macOS) | MIT |
 | `src/blob_tool/tracking/botsort_classroom.yaml` | tracker settings, adapted from Ultralytics' `botsort.yaml` | AGPL-3.0 |
 | [EdgeTAM](https://github.com/facebookresearch/EdgeTAM) [3] (weights via [`yonigozlan/EdgeTAM-hf`](https://huggingface.co/yonigozlan/EdgeTAM-hf)) | optional mask engine | Apache-2.0 |
 | [SAM 3](https://github.com/facebookresearch/sam3) [4] | optional engine; weights are downloaded by each user after accepting Meta's license | SAM License |
@@ -230,3 +243,4 @@ The McAdams voice anonymiser (`voice.py`) is an independent implementation of th
 12. J. W. Stigler, R. Gallimore, J. Hiebert, "Using video surveys to compare classrooms and teaching across cultures: Examples and lessons from the TIMSS and TIMSS-R video studies," Educational Psychologist 35, 87–100, 2000.
 13. R. Lehrer, C. L. Curtis, "Why are some solids perfect?," Teaching Children Mathematics 6(5), 324, 2000.
 14. I. Robinson, P. Robicheaux, M. Popov, D. Ramanan, N. Peri, "RF-DETR: Neural Architecture Search for Real-Time Detection Transformers," ICLR 2026. arXiv:2511.09554.
+15. T. Jiang, P. Lu, L. Zhang, N. Ma, R. Han, C. Lyu, Y. Li, K. Chen, "RTMPose: Real-Time Multi-Person Pose Estimation based on MMPose," arXiv:2303.07399, 2023.

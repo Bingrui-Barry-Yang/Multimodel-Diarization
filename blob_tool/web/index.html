@@ -63,6 +63,7 @@
             <input id="pitch" type="range" min="-6" max="6" step="0.5" value="0">
           </div>
           <div class="field">
+            <label class="check"><input id="pose" type="checkbox" checked> Pose estimation (stick figures per blob)</label>
             <label class="check"><input id="discard" type="checkbox"> Discard original after processing (phone mode)</label>
           </div>
         </details>
@@ -99,6 +100,8 @@
           <div class="seg" id="mode-seg" role="tablist">
             <button data-mode="original">Original</button>
             <button data-mode="blobs" class="active">Blobs</button>
+            <button data-mode="pose">Pose</button>
+            <button data-mode="blobpose">Blobs+Pose</button>
             <button data-mode="overlay">Overlay</button>
             <button data-mode="split">Split</button>
           </div>
@@ -147,6 +150,9 @@
               <a id="dl-video" class="btn" download>Processed video</a>
               <a id="dl-audio" class="btn" download>Altered audio</a>
               <a id="dl-tracks" class="btn" download>tracks.json</a>
+              <a id="dl-pose" class="btn" download>Pose video</a>
+              <a id="dl-blobpose" class="btn" download>Blobs+Pose video</a>
+              <a id="dl-poses" class="btn" download>poses.json</a>
               <button id="discard-btn" class="btn danger">Delete original files</button>
             </div>
           </aside>

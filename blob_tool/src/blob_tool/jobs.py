@@ -21,7 +21,8 @@ from . import pipeline
 WORKSPACE = Path(os.environ.get("BLOB_WORKSPACE", Path(__file__).resolve().parents[2] / "workspace"))
 
 # files a job may serve; anything else in the job dir is private
-PUBLIC_FILES = {"original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json"}
+PUBLIC_FILES = {"original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json",
+                "poses.json", "pose.mp4", "blobpose.mp4"}
 ORIGINAL_FILES = ("original.mp4", "original.wav")
 
 
@@ -52,8 +53,8 @@ class Job:
         tmp.replace(self.dir / "job.json")
 
 
-# share of total progress per stage; tracking dominates
-STAGE_WEIGHTS = {"prepare": 0.08, "track": 0.72, "render": 0.08, "voice": 0.07, "mux": 0.05}
+# share of total progress per stage; tracking and pose dominate
+STAGE_WEIGHTS = {"prepare": 0.05, "track": 0.5, "pose": 0.25, "render": 0.08, "voice": 0.05, "mux": 0.07}
 
 
 class JobManager:
