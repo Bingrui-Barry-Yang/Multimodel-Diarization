@@ -84,6 +84,17 @@ Restart `make run`. The engines are then selectable in the UI and greyed out unt
 
 SAM 3 weights are gated. Accept the license at <https://huggingface.co/facebook/sam3>, then run `cd blob_tool && uv run hf auth login`.
 
+### Optional: LLM comparison (Gemini)
+
+```bash
+make install-llm                      # adds google-genai
+cp .env.example .env                  # inside blob_tool/; .env is gitignored, never commit it
+# edit .env:  GEMINI_API_KEY=<your key>
+make run                              # the Makefile loads .env
+```
+
+Get a free key at <https://aistudio.google.com>: sign in with a Google account → **Get API key** → **Create API key** (it creates a Cloud project; no billing account is needed for the free tier). Docker reads the same `blob_tool/.env` through `docker-compose.yml`. See [LLM comparison](#llm-comparison) for what is sent and the privacy caveats.
+
 ### Optional: Docker
 
 CPU only, because Docker on macOS cannot reach the Apple GPU. It is useful for reproducibility or for running on a Linux server.
@@ -104,6 +115,8 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 | first job fails while loading the model | check the terminal running `make run`; the first job downloads the detector weights and needs internet once |
 | a job is stuck at "interrupted by server restart" | the server was stopped mid-job; delete it in the Jobs list and upload again |
 | EdgeTAM / SAM 3 greyed out | `make install-sam` and restart; SAM 3 additionally needs the HF login above |
+| "LLM unavailable" in the comparison panel | `make install-llm`, put `GEMINI_API_KEY=…` in `blob_tool/.env`, restart `make run` |
+| an LLM answer shows `429` / `RESOURCE_EXHAUSTED` | free-tier rate limit; wait a minute, or send fewer versions per run |
 | processing is slow | check MPS (step 3); choose detector size *nano*; Docker is always CPU-only |
 | `make docker-run` port clash with `make run` | `make docker-run PORT=8001` |
 
@@ -119,7 +132,9 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 3. **Downloads**: processed video (blobs + altered voice), altered wav, `tracks.json`, and, with pose on, the pose and blobs+pose videos and `poses.json`.
 4. **Delete original files** removes the only copies of the original pixels and voice (`original.mp4`, `original.wav`). The checkbox *Discard original after processing* does this automatically, which matches how the phone version will behave. The raw upload is always deleted after processing.
 
-URLs are shareable inside your machine: `#job=<id>&mode=overlay&t=12.5&sel=3`.
+5. **Compare with LLM** opens a full-screen panel: see [LLM comparison](#llm-comparison).
+
+URLs are shareable inside your machine: `#job=<id>&mode=overlay&t=12.5&sel=3` (`&llm=1` opens the comparison panel).
 
 ## Engines
 
@@ -155,6 +170,23 @@ Skeletons are drawn from keypoints only (`render.draw_skeletons`): in the blob's
 
 The **same α is used for the whole recording**, so all speakers move through the same transform and stay distinguishable from each other. On the AMI sample, pairwise speaker distances (coarse spectral envelope) are preserved while the waveform correlation with the original drops to about 0.23. A per-utterance random α would hide identity more strongly, but it would break diarization. McAdams is a *light* anonymiser: an attacker who knows the method can partly invert it. For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
 
+## LLM comparison
+
+The research question is whether a model can still tell who is doing and saying what once the video is reduced to blobs or skeletons. **Compare with LLM** sends one prompt (default: *"Describe what happens in this video and who said what."*) to Gemini about up to four versions of the same job, and shows the answers side by side with each video:
+
+| Version | File sent | Audio |
+|---|---|---|
+| Original | `original.mp4` | original voices |
+| Blobs | `processed.mp4` | altered |
+| Pose | `pose.mp4` | altered |
+| Blobs + Pose | `blobpose.mp4` | altered |
+
+- **No cross-talk between versions.** Each version is its own request (`llm.py`): a new client, a fresh upload streamed under the neutral name `video.mp4` (so file names like "blob" or "pose" give nothing away), one stateless `generate_content` call with `temperature = 0`, and no chat history. The upload is deleted right after the answer.
+- Runs are queued on their own worker thread, so they never block video processing. Versions are sent one after another to stay inside free-tier rate limits. Each run is saved as `workspace/<job>/llm/<run>.json` (prompt, model, and per-version answer, error and time) and deleted with the job.
+- Models: `gemini-3.5-flash-lite` (default) and `gemini-3.8-flash`, both on the free tier with video input according to Google's pricing page (checked 2026-11).
+
+**Privacy.** On the free tier, Google's terms say submitted content *is used to improve Google's products* and may be read by human reviewers, and they ask you not to send personal information. The blob and pose versions contain no original pixels, but the voices are only lightly anonymised (see [Voice alteration](#voice-alteration)). The **original** is never pre-selected. Sending it needs a confirmation tick for every run, and the API refuses it without `confirm_original: true`. Do not send footage of children without consent, and check the dataset's terms first (for example, ClassBank is CC BY-NC-SA and footage of children). The AMI sample (adults, CC BY 4.0) is the safe test case. A paid key (billing enabled) switches Google to the paid-tier terms, where content is not used for training.
+
 ## Outputs (`workspace/<job>/`)
 
 | File | Contents | Privacy-safe |
@@ -165,6 +197,7 @@ The **same α is used for the whole recording**, so all speakers move through th
 | `poses.json` | `keypoints` (17 COCO names), `skeleton` (index pairs) and `frames[i] = [[id, x0,y0,s0, …, x16,y16,s16], …]`, x/y normalised | ✅ (body keypoints, no pixels) |
 | `pose.mp4`, `blobpose.mp4` | stick figures only / blobs + stick figures, with altered audio | ✅ |
 | `original.mp4`, `original.wav` | normalised copy of the input, kept only for before/after comparison | ❌ deleted by "discard original" |
+| `llm/<run>.json` | LLM comparison runs: prompt, model, answers per version (not served as a file) | text only |
 
 `tracks.json` is the intended input for the next stage: a blob-only multimodal or diarization model. It lets you test whether a model can still tell who is speaking when all it gets is blobs.
 
@@ -214,6 +247,8 @@ This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE)
 | [supervision](https://github.com/roboflow/supervision) | detection containers for RF-DETR / trackers | MIT |
 | [rtmlib](https://github.com/Tau-J/rtmlib) | running RTMPose without mmcv/mmpose | Apache-2.0 |
 | RTMPose-m Body7 ONNX weights from [MMPose](https://github.com/open-mmlab/mmpose) [15] | pose estimation | Apache-2.0 (trained on Body7 = COCO, AI Challenger, CrowdPose, MPII, sub-JHMDB, Halpe, PoseTrack18; check those datasets' terms before commercial use) |
+| [Google Gen AI SDK](https://github.com/googleapis/python-genai) (`google-genai`, optional `llm` extra) | LLM comparison client | Apache-2.0 |
+| [Gemini API](https://ai.google.dev/gemini-api/terms) (remote service, not bundled) | LLM comparison | Gemini API Additional Terms of Service |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | pose inference (CoreML execution provider on macOS) | MIT |
 | `src/blob_tool/tracking/botsort_classroom.yaml` | tracker settings, adapted from Ultralytics' `botsort.yaml` | AGPL-3.0 |
 | [EdgeTAM](https://github.com/facebookresearch/EdgeTAM) [3] (weights via [`yonigozlan/EdgeTAM-hf`](https://huggingface.co/yonigozlan/EdgeTAM-hf)) | optional mask engine | Apache-2.0 |

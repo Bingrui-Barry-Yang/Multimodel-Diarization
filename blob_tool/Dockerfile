@@ -18,10 +18,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 # deps first so code edits don't reinstall torch (on Apple Silicon hosts the linux/arm64 torch wheel is CPU-only)
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --extra llm
 COPY src ./src
 COPY web ./web
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra llm
 
 EXPOSE 8000
 CMD ["uvicorn", "blob_tool.app:app", "--host", "0.0.0.0", "--port", "8000"]

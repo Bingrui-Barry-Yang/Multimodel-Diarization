@@ -97,6 +97,8 @@
             <h2 id="viewer-title"></h2>
             <div id="viewer-meta" class="muted small"></div>
           </div>
+          <div class="viewer-actions">
+          <button id="llm-btn" class="btn inline" title="Ask a video LLM about each version and compare the answers">Compare with LLM</button>
           <div class="seg" id="mode-seg" role="tablist">
             <button data-mode="original">Original</button>
             <button data-mode="blobs" class="active">Blobs</button>
@@ -104,6 +106,7 @@
             <button data-mode="blobpose">Blobs+Pose</button>
             <button data-mode="overlay">Overlay</button>
             <button data-mode="split">Split</button>
+          </div>
           </div>
         </div>
 
@@ -159,6 +162,45 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <div id="llm-panel" class="llm-panel" role="dialog" aria-label="Compare with LLM" hidden>
+    <header class="llm-head">
+      <div>
+        <h2>Compare with LLM</h2>
+        <div id="llm-sub" class="muted small"></div>
+      </div>
+      <button id="llm-close" class="icon-btn" title="Close (esc)">✕</button>
+    </header>
+    <div class="llm-body">
+      <aside class="llm-side card">
+        <div class="field">
+          <label for="llm-prompt">Prompt</label>
+          <textarea id="llm-prompt" rows="6"></textarea>
+        </div>
+        <div class="field">
+          <label>Versions to send</label>
+          <div id="llm-variants" class="llm-variants"></div>
+          <div class="hint">Each version is a separate request with a fresh upload named <code>video.mp4</code> and no chat history, so no answer can see another version.</div>
+        </div>
+        <div id="llm-warn" class="llm-warn" hidden>
+          <strong>The original shows identifiable people.</strong> On the free Gemini tier Google may use uploaded content to improve its products, and human reviewers may see it. Do not send footage of children without consent.
+          <label class="check"><input id="llm-confirm" type="checkbox"> I understand; send the original in this run</label>
+        </div>
+        <div class="field">
+          <label for="llm-model">Model</label>
+          <select id="llm-model"></select>
+        </div>
+        <button id="llm-run" class="primary">Run</button>
+        <div id="llm-status" class="muted small"></div>
+        <h3>Previous runs</h3>
+        <ul id="llm-runs" class="job-list"><li class="muted small">No runs yet</li></ul>
+      </aside>
+      <section class="llm-main">
+        <div id="llm-run-prompt" class="llm-run-prompt muted"></div>
+        <div id="llm-grid" class="llm-grid"></div>
+      </section>
+    </div>
   </div>
 
   <script src="app.js"></script>

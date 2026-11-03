@@ -8,6 +8,9 @@ services:
       - ./workspace:/data/workspace   # jobs persist on the host
       - blob-models:/data/models      # model weights download once
       - blob-cache:/data/hf
+    env_file:                       # GEMINI_API_KEY for the LLM comparison (optional)
+      - path: .env
+        required: false
     restart: unless-stopped
 
 volumes:

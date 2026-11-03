@@ -20,6 +20,7 @@ make test          # pytest; no model downloads needed
 make sample-data   # one busiest-30 s clip per dataset (AMI + each ClassBank corpus) → blob_tool/samples/sample/
 make all-data      # every recording in samples/raw/, full length → blob_tool/samples/all/
 make install-sam   # optional EdgeTAM / SAM 3 engines (transformers, accelerate, timm)
+make install-llm   # optional Gemini client; key goes in blob_tool/.env (GEMINI_API_KEY=…), loaded by the Makefile
 make docker-build / docker-run / docker-stop   # CPU-only container
 ```
 
@@ -45,7 +46,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - `src/blob_tool/pose.py`: top-down RTMPose-m (rtmlib/ONNX) on each tracked blob's box, so skeletons share the blob ID and colour. Writes `poses.json`. Weights are in `models/rtmlib/` (via `TORCH_HOME`).
 - `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α) + optional pitch shift.
 - `src/blob_tool/jobs.py`: job dirs in `workspace/<id>/`, one sequential worker thread, `PUBLIC_FILES` allow-list.
-- `src/blob_tool/app.py`: FastAPI. `/api/config`, `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, plus the static `web/`.
+- `src/blob_tool/llm.py`: Gemini comparison. One isolated request per version (new client, upload streamed as `video.mp4`, `generate_content`, delete). `LlmManager` has its own worker thread and stores runs in `workspace/<id>/llm/<run>.json`.
+- `src/blob_tool/app.py`: FastAPI. `/api/config` (includes `llm` status), `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, `/api/jobs/{id}/llm[/{run}]`, plus the static `web/`.
 - `web/`: vanilla JS/CSS with no build step. A canvas overlay draws polygons from `tracks.json` (and skeletons from `poses.json` in Overlay mode). The Pose / Blobs+Pose modes swap the processed `<video>` source to `pose.mp4` / `blobpose.mp4`. Deep links take the form `#job=<id>&mode=overlay&t=4&sel=3`.
 - `scripts/build_samples.py`: downloads AMI into `samples/raw/ami/`, pairs ClassBank videos with their `.cha` in `samples/raw/classbank/<corpus>/`, and writes `samples/<sample|all>/<dataset>/[<corpus>/]<recording>/` with `.mp4` + `.rttm` (+ `.transcript.tsv`) and a `SOURCES.md` per mode.
 
@@ -59,7 +61,10 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 
 ## Gotchas (learned the hard way)
 
-- `make install` must stay `uv sync --inexact`. A plain `uv sync` uninstalls the optional `sam` extra.
+- `make install` must stay `uv sync --inexact`. A plain `uv sync` uninstalls the optional `sam` and `llm` extras, and so does `uv sync --extra X` without `--inexact`.
+- **`blob_tool/.env` holds the Gemini key. It is gitignored and dockerignored and must never be committed.** Only `.env.example` is tracked.
+- Gemini free tier: Google may use the content to improve its products, and human reviewers may see it. The "original" version must stay opt-in per run (UI tick plus `confirm_original` enforced server-side). Never pre-select it, and never send it by default.
+- LLM tests use a fake client (`tests/test_llm.py`). They check that versions are isolated, so keep each version as a separate request.
 - `pyproject.toml` pins `torch`/`torchvision` to the **CPU index on Linux** (`[tool.uv.sources]`). Without it the Docker image is about 20 GB of CUDA libraries instead of about 4.7 GB. macOS uses the PyPI wheel (MPS).
 - Docker on macOS cannot use the Apple GPU, which is why `make run` is native uv and Docker is CPU-only.
 - The EdgeTAM transformers checkpoint is `yonigozlan/EdgeTAM-hf` (`facebook/EdgeTAM` is the raw `.pt`), and it needs `timm`.

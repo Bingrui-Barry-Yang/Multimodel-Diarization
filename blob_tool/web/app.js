@@ -303,13 +303,14 @@ async function loadViewer(job) {
   drawPresence();
 }
 
-// #job=<id>&mode=overlay&t=4.2&sel=3 — shareable view state
+// #job=<id>&mode=overlay&t=4.2&sel=3&llm=1 — shareable view state
 function applyDeepLink() {
   const p = new URLSearchParams(location.hash.slice(1));
   const mode = p.get("mode");
   if (["original", "blobs", "pose", "blobpose", "overlay", "split"].includes(mode) && modeAvailable(mode)) state.mode = mode;
   const sel = parseInt(p.get("sel"), 10);
   if (state.tracks.objects.some((o) => o.id === sel)) selectObject(sel);
+  if (p.get("llm") === "1") openLlm();
   const t = parseFloat(p.get("t"));
   if (isFinite(t)) {
     const go = () => seekTo(t);
@@ -418,7 +419,8 @@ vOrig.addEventListener("ended", pauseBoth);
 vProc.addEventListener("loadedmetadata", () => { resizeCanvas(); draw(true); });
 
 document.addEventListener("keydown", (e) => {
-  if ($("viewer").hidden || e.target.matches("input[type=text], select")) return;
+  if (!$("llm-panel").hidden) { if (e.key === "Escape") closeLlm(); return; }
+  if ($("viewer").hidden || e.target.matches("input[type=text], select, textarea")) return;
   if (e.code === "Space") { e.preventDefault(); togglePlay(); }
   else if (e.key === "ArrowLeft") { e.preventDefault(); stepFrames(e.shiftKey ? -10 : -1); }
   else if (e.key === "ArrowRight") { e.preventDefault(); stepFrames(e.shiftKey ? 10 : 1); }
@@ -695,6 +697,147 @@ $("discard-btn").onclick = async () => {
     await api(`/api/jobs/${state.job.id}/discard-original`, { method: "POST" });
     await refreshJobs();
   } catch (err) { alert(err.message); }
+};
+
+/* ------------------------------------------------------------ LLM compare */
+
+const LLM_LABELS = { original: "Original", blobs: "Blobs", pose: "Pose", blobpose: "Blobs + Pose" };
+const LLM_FILES = { original: "original.mp4", blobs: "processed.mp4", pose: "pose.mp4", blobpose: "blobpose.mp4" };
+const llm = { runId: null, timer: null };
+
+function llmCfg() { return (state.config && state.config.llm) || { available: false, hint: "server config not loaded", models: [], variants: [] }; }
+
+function openLlm() {
+  const cfg = llmCfg();
+  pauseBoth();
+  $("llm-panel").hidden = false;
+  $("llm-sub").textContent = `${state.job.filename} · ` + (cfg.available ? "Gemini API, free tier" : `LLM unavailable: ${cfg.hint}`);
+  if (!$("llm-prompt").value) $("llm-prompt").value = cfg.default_prompt || "";
+  const sel = $("llm-model");
+  if (!sel.options.length) for (const m of cfg.models) sel.add(new Option(m, m));
+  const box = $("llm-variants");
+  box.innerHTML = "";
+  for (const v of cfg.variants) {
+    const has = state.job.files.includes(LLM_FILES[v]);
+    const lab = document.createElement("label");
+    lab.className = has ? "" : "off";
+    lab.innerHTML = `<input type="checkbox" value="${v}"> <span></span>`;
+    lab.querySelector("span").textContent = LLM_LABELS[v] + (has ? "" : " (not available)");
+    const cb = lab.querySelector("input");
+    cb.disabled = !has;
+    cb.checked = has && v !== "original";  // the original is never pre-selected
+    cb.onchange = updateLlmWarn;
+    box.append(lab);
+  }
+  $("llm-confirm").checked = false;
+  updateLlmWarn();
+  $("llm-run").disabled = !cfg.available;
+  $("llm-status").textContent = "";
+  llm.runId = null;
+  $("llm-grid").innerHTML = "";
+  $("llm-run-prompt").textContent = "";
+  loadLlmRuns(true);
+}
+
+function closeLlm() {
+  $("llm-panel").hidden = true;
+  clearTimeout(llm.timer);
+  for (const v of document.querySelectorAll("#llm-grid video")) v.pause();
+}
+
+function checkedVariants() {
+  return [...document.querySelectorAll("#llm-variants input:checked")].map((c) => c.value);
+}
+
+function updateLlmWarn() {
+  const orig = checkedVariants().includes("original");
+  $("llm-warn").hidden = !orig;
+  if (!orig) $("llm-confirm").checked = false;
+}
+
+async function loadLlmRuns(showLatest = false) {
+  const runs = await api(`/api/jobs/${state.job.id}/llm`);
+  const ul = $("llm-runs");
+  ul.innerHTML = runs.length ? "" : '<li class="muted small">No runs yet</li>';
+  for (const r of runs) {
+    const li = document.createElement("li");
+    li.className = "job" + (r.id === llm.runId ? " active" : "");
+    li.innerHTML = `<span class="job-name"></span><span class="job-status ${r.status}">${r.status}</span>
+      <span class="job-sub"><span></span></span>`;
+    li.querySelector(".job-name").textContent = r.prompt;
+    li.querySelector(".job-sub span").textContent =
+      `${new Date(r.created * 1000).toLocaleString()} · ${r.model} · ${r.variants.map((v) => LLM_LABELS[v]).join(", ")}`;
+    li.onclick = () => showLlmRun(r.id);
+    ul.append(li);
+  }
+  if (showLatest && runs.length) showLlmRun(runs[0].id);
+}
+
+async function showLlmRun(id) {
+  clearTimeout(llm.timer);
+  const changed = llm.runId !== id;
+  llm.runId = id;
+  const run = await api(`/api/jobs/${state.job.id}/llm/${id}`);
+  if (llm.runId !== id || $("llm-panel").hidden) return;
+  const grid = $("llm-grid");
+  if (changed || grid.dataset.run !== id) {
+    grid.dataset.run = id;
+    grid.innerHTML = "";
+    for (const v of run.variants) {
+      const card = document.createElement("article");
+      card.className = "llm-card";
+      card.dataset.variant = v;
+      card.innerHTML = `<header><strong></strong><span class="muted small status"></span></header>
+        <video controls preload="metadata" playsinline></video><div class="answer"></div>`;
+      card.querySelector("strong").textContent = LLM_LABELS[v];
+      const video = card.querySelector("video");
+      if (state.job.files.includes(LLM_FILES[v])) video.src = fileUrl(state.job, LLM_FILES[v]);
+      else video.hidden = true;
+      grid.append(card);
+    }
+    for (const li of document.querySelectorAll("#llm-runs li.job")) li.classList.remove("active");
+  }
+  $("llm-run-prompt").textContent = `“${run.prompt}” · ${run.model}`;
+  for (const v of run.variants) {
+    const a = run.answers[v] || {};
+    const card = grid.querySelector(`.llm-card[data-variant="${v}"]`);
+    card.querySelector(".status").textContent = a.status + (a.seconds != null ? ` · ${a.seconds}s` : "");
+    const ans = card.querySelector(".answer");
+    ans.classList.toggle("error", a.status === "error");
+    ans.textContent = a.status === "done" ? a.text : a.status === "error" ? a.error :
+      a.status === "running" ? "Waiting for the model…" : "Queued";
+  }
+  if (run.status !== "done") llm.timer = setTimeout(() => showLlmRun(id), 1500);
+  else loadLlmRuns();
+}
+
+$("llm-btn").onclick = openLlm;
+$("llm-close").onclick = closeLlm;
+$("llm-run").onclick = async () => {
+  const variants = checkedVariants();
+  if (!variants.length) { $("llm-status").textContent = "Pick at least one version."; return; }
+  const confirmOriginal = $("llm-confirm").checked;
+  if (variants.includes("original") && !confirmOriginal) {
+    $("llm-status").textContent = "Tick the confirmation to send the original, or untick Original.";
+    return;
+  }
+  $("llm-run").disabled = true;
+  try {
+    const run = await api(`/api/jobs/${state.job.id}/llm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: $("llm-prompt").value, variants, model: $("llm-model").value, confirm_original: confirmOriginal }),
+    });
+    $("llm-confirm").checked = false;  // consent is per run
+    updateLlmWarn();
+    $("llm-status").textContent = "";
+    await loadLlmRuns();
+    showLlmRun(run.id);
+  } catch (err) {
+    $("llm-status").textContent = `Failed: ${err.message}`;
+  } finally {
+    $("llm-run").disabled = !llmCfg().available;
+  }
 };
 
 /* ------------------------------------------------------------------- boot */

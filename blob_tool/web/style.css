@@ -192,9 +192,46 @@ button.link { background: none; border: 0; color: var(--accent); cursor: pointer
 .obj .span i { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
 .downloads { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 6px; }
 
+/* LLM comparison (full screen) */
+.viewer-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn.inline { display: inline-block; width: auto; margin: 0; }
+.llm-panel { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: flex; flex-direction: column; }
+.llm-head {
+  height: 52px; flex: none; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.llm-head h2 { margin: 0; }
+.icon-btn { width: 34px; height: 30px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); cursor: pointer; }
+.icon-btn:hover { border-color: var(--accent); }
+.llm-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; padding: 16px; }
+.llm-side { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.llm-side .field { margin: 4px 0; }
+.llm-side h3 { margin-top: 12px; }
+.llm-side textarea {
+  width: 100%; resize: vertical; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+  padding: 8px; color: var(--text); font: inherit;
+}
+.llm-variants { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+.llm-variants label { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; justify-content: flex-start; }
+.llm-variants label.off { color: var(--muted); }
+.llm-warn { border: 1px solid var(--danger); background: rgba(255,107,107,.08); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.llm-warn .check { display: flex; gap: 8px; margin-top: 6px; font-size: 13px; }
+.llm-main { min-width: 0; overflow-y: auto; }
+.llm-run-prompt { margin-bottom: 10px; white-space: pre-wrap; }
+.llm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; }
+.llm-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.llm-card header { display: flex; justify-content: space-between; align-items: baseline; }
+.llm-card video { width: 100%; max-height: 30vh; background: var(--stage-bg); border-radius: 8px; }
+.llm-card .answer { white-space: pre-wrap; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.llm-card .answer.error { color: var(--danger); }
+
 @media (max-width: 1100px) {
   .viewer-body { grid-template-columns: 1fr; }
   .objects { max-height: none; }
+}
+@media (max-width: 900px) {
+  .llm-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .llm-main { overflow: visible; }
 }
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; height: auto; }

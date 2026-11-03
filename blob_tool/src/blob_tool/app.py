@@ -11,8 +11,9 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, llm
 from .jobs import PUBLIC_FILES, JobManager
 from .render import STYLES
 from .tracking import available_engines
@@ -21,6 +22,14 @@ WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 app = FastAPI(title="Blob Tool", version=__version__)
 manager = JobManager()
+llm_manager = llm.LlmManager(manager)
+
+
+class LlmRequest(BaseModel):
+    prompt: str
+    variants: list[str]
+    model: str = llm.MODELS[0]
+    confirm_original: bool = False
 
 
 def _job_or_404(job_id: str):
@@ -39,6 +48,7 @@ def config() -> dict:
         "engines": available_engines(),
         "classes": list(coco_names().values()),
         "styles": list(STYLES),
+        "llm": llm.status(),
     }
 
 
@@ -93,6 +103,31 @@ def get_file(job_id: str, name: str) -> FileResponse:
     download = f"{Path(job.filename).stem}_{name}"
     # FileResponse supports HTTP Range, which <video> seeking needs
     return FileResponse(path, filename=download, content_disposition_type="inline")
+
+
+@app.post("/api/jobs/{job_id}/llm")
+def create_llm_run(job_id: str, req: LlmRequest) -> dict:
+    job = _job_or_404(job_id)
+    if not llm.status()["available"]:
+        raise HTTPException(503, llm.status()["hint"])
+    try:
+        run = llm_manager.submit(job, req.prompt, req.variants, req.model, req.confirm_original)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return asdict(run)
+
+
+@app.get("/api/jobs/{job_id}/llm")
+def list_llm_runs(job_id: str) -> list[dict]:
+    return llm_manager.list(_job_or_404(job_id))
+
+
+@app.get("/api/jobs/{job_id}/llm/{run_id}")
+def get_llm_run(job_id: str, run_id: str) -> dict:
+    run = llm_manager.get(_job_or_404(job_id), run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    return run
 
 
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

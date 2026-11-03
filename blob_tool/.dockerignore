@@ -4,3 +4,4 @@ samples
 models
 tests
 **/__pycache__
+.env

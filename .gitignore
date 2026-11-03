@@ -6,6 +6,10 @@ __pycache__/
 .DS_Store
 *.egg-info/
 
+# secrets
+.env
+blob_tool/.env
+
 # runtime data — never commit videos of people
 blob_tool/workspace/
 blob_tool/samples/

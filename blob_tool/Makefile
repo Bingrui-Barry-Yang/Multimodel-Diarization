@@ -3,11 +3,16 @@ HOST ?= 127.0.0.1
 PORT ?= 8000
 UV   ?= uv
 
-.PHONY: help install install-sam run dev test sample-data all-data docker-build docker-run docker-stop clean
+# GEMINI_API_KEY for the LLM comparison lives in blob_tool/.env (gitignored); see .env.example
+-include .env
+export GEMINI_API_KEY
+
+.PHONY: help install install-sam install-llm run dev test sample-data all-data docker-build docker-run docker-stop clean
 
 help:
 	@echo "make install       install deps with uv (YOLO engine)"
 	@echo "make install-sam   also install EdgeTAM / SAM 3 engines (transformers)"
+	@echo "make install-llm   also install the Gemini client for the LLM comparison"
 	@echo "make run           start the UI at http://$(HOST):$(PORT) (uses Apple GPU / CUDA if present)"
 	@echo "make dev           same, with auto-reload"
 	@echo "make test          run unit + smoke tests"
@@ -21,7 +26,10 @@ install:
 	$(UV) sync --inexact  # --inexact keeps the optional sam extra if installed
 
 install-sam:
-	$(UV) sync --extra sam
+	$(UV) sync --inexact --extra sam
+
+install-llm:
+	$(UV) sync --inexact --extra llm
 
 run: install
 	@echo "→ http://$(HOST):$(PORT)"
