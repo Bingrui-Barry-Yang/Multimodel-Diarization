@@ -72,6 +72,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - The repo is **AGPL-3.0** (`LICENSE`) because Ultralytics YOLO is AGPL-3.0. The phone/app path must use only the `rfdetr` engine. Removing AGPL from the repo would mean moving `ultralytics` to an extra and reseeding `edgetam` from RF-DETR (not done yet).
 - `/api/config` class names come from `rfdetr.assets.coco_classes`, so starting the UI does not load any model. RF-DETR class ids are COCO category ids (person = 1).
 - Any new model, dataset, or adapted code must be added to the *Third-party components* table and *References* in `blob_tool/README.md`, with its license verified at the source. Sample media are never committed (footage of people; most licenses forbid redistribution).
+- Browsers may keep a cached `web/` after an update (StaticFiles sends no `Cache-Control`). Tell the user to hard-reload (`Cmd+Shift+R`) when new UI does not show up.
 - Headless Chrome screenshots do not paint `<video>` layers, and seek events do not fire under `--virtual-time-budget`. Check playback in a real browser.
 - ClassBank media need a free TalkBank login, so they are downloaded by hand, not by `make sample-data`. The license is CC BY-NC-SA 4.0 and every use must cite the corpus reference on its page (`CORPORA` in `build_samples.py`).
 - Pexels clips were dropped: they have no usable classroom audio and no ground truth.

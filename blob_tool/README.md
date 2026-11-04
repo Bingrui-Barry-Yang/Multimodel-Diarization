@@ -36,10 +36,10 @@ Every `make` target works from the repo root (it delegates to `blob_tool/`) or f
 ### 3. Install dependencies
 
 ```bash
-make install        # uv sync → creates blob_tool/.venv with torch, ultralytics, fastapi, opencv, …
+make install        # uv sync → creates blob_tool/.venv with torch, rfdetr + trackers, rtmlib + onnxruntime, ultralytics, fastapi, opencv, …
 ```
 
-The first install takes a minute or two and about 1.2 GB on disk (mostly PyTorch). On macOS this is the normal PyPI torch wheel, which includes Apple GPU (MPS) support. To check that the GPU is visible:
+After a `git pull`, run `make install` again (`make run` also does it) to pick up new dependencies. The first install takes a few minutes and about 1.4 GB on disk with the optional extras (mostly PyTorch). On macOS this is the normal PyPI torch wheel, which includes Apple GPU (MPS) support. To check that the GPU is visible:
 
 ```bash
 cd blob_tool && uv run python -c "import torch; print('MPS:', torch.backends.mps.is_available())"
@@ -57,7 +57,9 @@ make run            # → open http://127.0.0.1:8000
 - Use a different port with `make run PORT=8080`.
 - To reach it from another device on your network, run `make run HOST=0.0.0.0`. Note that this exposes your videos to the network.
 
-**First processing run:** the RF-DETR-Seg weights (about 130 MB for *small*) download automatically into `blob_tool/models/`. That first job needs internet access and takes a few seconds longer.
+**First processing run:** the RF-DETR-Seg weights (about 130 MB for *small*) and, with pose on, the RTMPose weights (about 50 MB, into `blob_tool/models/rtmlib/`) download automatically. That first job needs internet access and takes a few seconds longer.
+
+**After updating the code**, reload the page with `Cmd+Shift+R` (Windows/Linux: `Ctrl+Shift+R`). Otherwise the browser may keep the old page, and new buttons such as *Pose* or *Compare with LLM* will not show.
 
 ### 5. Try it with sample videos (optional)
 
@@ -87,13 +89,21 @@ SAM 3 weights are gated. Accept the license at <https://huggingface.co/facebook/
 ### Optional: LLM comparison (Gemini)
 
 ```bash
-make install-llm                      # adds google-genai
-cp .env.example .env                  # inside blob_tool/; .env is gitignored, never commit it
-# edit .env:  GEMINI_API_KEY=<your key>
-make run                              # the Makefile loads .env
+make install-llm                            # from the repo root: adds google-genai
+cp blob_tool/.env.example blob_tool/.env    # .env is gitignored, never commit it
+nano blob_tool/.env                         # set GEMINI_API_KEY=<your key>  (no spaces, no quotes)
+make run                                    # the Makefile loads blob_tool/.env
 ```
 
-Get a free key at <https://aistudio.google.com>: sign in with a Google account → **Get API key** → **Create API key** (it creates a Cloud project; no billing account is needed for the free tier). Docker reads the same `blob_tool/.env` through `docker-compose.yml`. See [LLM comparison](#llm-comparison) for what is sent and the privacy caveats.
+If the server is already running, stop it with `Ctrl+C` and run `make run` again, because the key is read only at start-up. Never paste the key into code, issues or chats.
+
+Get a free key at <https://aistudio.google.com>: sign in with a Google account → **Get API key** → **Create API key** (it creates a Cloud project; no billing account is needed for the free tier).
+
+**Make sure the key's project has no billing account.** If your Google account already has a billing account, a new project can be linked to it automatically, and the key then uses the paid tier and costs money. Check in one of two places:
+- In AI Studio's API keys page, the key or project should be labelled *Free* (not *Tier 1* / paid).
+- At <https://console.cloud.google.com/billing/projects>, the project should not be listed under your billing account. If it is, select the project → *Billing* → *Disable billing*.
+
+A small budget alert (Billing → Budgets & alerts) is a cheap safety net. Docker reads the same `blob_tool/.env` through `docker-compose.yml`. See [LLM comparison](#llm-comparison) for what is sent and the privacy caveats.
 
 ### Optional: Docker
 
@@ -115,6 +125,7 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 | first job fails while loading the model | check the terminal running `make run`; the first job downloads the detector weights and needs internet once |
 | a job is stuck at "interrupted by server restart" | the server was stopped mid-job; delete it in the Jobs list and upload again |
 | EdgeTAM / SAM 3 greyed out | `make install-sam` and restart; SAM 3 additionally needs the HF login above |
+| new buttons (Pose, Compare with LLM) missing after an update | the browser shows a cached page: hard-reload with `Cmd+Shift+R` |
 | "LLM unavailable" in the comparison panel | `make install-llm`, put `GEMINI_API_KEY=…` in `blob_tool/.env`, restart `make run` |
 | an LLM answer shows `429` / `RESOURCE_EXHAUSTED` | free-tier rate limit; wait a minute, or send fewer versions per run |
 | processing is slow | check MPS (step 3); choose detector size *nano*; Docker is always CPU-only |
