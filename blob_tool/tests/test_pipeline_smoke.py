@@ -67,8 +67,8 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     monkeypatch.setattr(pipeline, "estimate_poses", fake_poses)
     stages = []
     out = tmp_path / "job"
-    result = pipeline.run(synthetic_video, out, pipeline.PipelineParams(),
-                          lambda s, f, m: stages.append(s))
+    params = pipeline.PipelineParams()
+    result = pipeline.run(synthetic_video, out, params, lambda s, f, m: stages.append(s))
 
     assert result["objects"] == 1 and result["has_audio"]
     assert stages[0] == "prepare" and stages[-1] == "mux"
@@ -81,6 +81,13 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     poses = json.loads((out / "poses.json").read_text())
     assert len(poses["frames"]) == N and len(poses["keypoints"]) == 17
     assert all(len(p) == 1 + 17 * 3 and p[0] == 1 for row in poses["frames"] for p in row)
+
+    # the seed was drawn for this run and stays out of every served text file
+    seed = str(params.seed)
+    assert params.seed is not None
+    for name in ("tracks.json", "poses.json"):
+        assert seed not in (out / name).read_text()
+    assert seed not in json.dumps(result)
 
     info = media.probe(out / "processed.mp4")
     assert (info.width, info.height) == (W, H) and info.has_audio
@@ -105,3 +112,13 @@ def test_pose_can_be_turned_off(tmp_path, synthetic_video, monkeypatch):
                           lambda *a: None)
     assert not result["poses"] and (out / "processed.mp4").exists()
     assert not (out / "pose.mp4").exists() and not (out / "poses.json").exists()
+
+
+def test_seed_parsing():
+    assert pipeline.PipelineParams.from_dict({}).seed is None
+    assert pipeline.PipelineParams.from_dict({"seed": ""}).seed is None
+    assert pipeline.PipelineParams.from_dict({"seed": "42"}).seed == 42
+    with pytest.raises(ValueError):
+        pipeline.PipelineParams.from_dict({"seed": -1})
+    with pytest.raises(ValueError):
+        pipeline.PipelineParams.from_dict({"seed": "abc"})

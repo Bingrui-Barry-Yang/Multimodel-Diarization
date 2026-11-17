@@ -13,6 +13,7 @@ Outputs in the job directory:
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -40,6 +41,7 @@ class PipelineParams:
     blob: BlobParams = field(default_factory=BlobParams)
     voice: voice.VoiceParams = field(default_factory=voice.VoiceParams)
     pose: PoseParams = field(default_factory=PoseParams)
+    seed: int | None = None  # secret per job: voice transform + blur noise; None = draw a new one
 
     @classmethod
     def from_dict(cls, d: dict) -> PipelineParams:
@@ -49,14 +51,30 @@ class PipelineParams:
             blob=BlobParams(**d.get("blob", {})),
             voice=voice.VoiceParams(**d.get("voice", {})),
             pose=PoseParams(**d.get("pose", {})),
+            seed=parse_seed(d.get("seed")),
         )
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
+def parse_seed(value) -> int | None:
+    if value is None or value == "":
+        return None
+    seed = int(value)
+    if seed < 0:
+        raise ValueError("seed must be a non-negative integer")
+    return seed
+
+
+def new_seed() -> int:
+    return secrets.randbits(63)
+
+
 def run(src: Path, workdir: Path, params: PipelineParams, progress: ProgressFn) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
+    if params.seed is None:
+        params.seed = new_seed()
 
     # 1. prepare: normalise to CFR H.264 so frame indices line up with the audio timeline
     progress("prepare", 0.0, "probing input")
@@ -103,7 +121,7 @@ def run(src: Path, workdir: Path, params: PipelineParams, progress: ProgressFn) 
         progress("voice", 0.1, "anonymising voices")
         audio, sr = sf.read(workdir / "original.wav", dtype="float32")
         altered = workdir / "altered.wav"
-        sf.write(altered, voice.anonymize(audio, sr, params.voice), sr)
+        sf.write(altered, voice.anonymize(audio, sr, params.voice, params.seed), sr)
         progress("voice", 1.0, "voices altered")
     else:
         progress("voice", 1.0, "no audio track")

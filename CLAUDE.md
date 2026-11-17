@@ -44,7 +44,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
   - `TrackStore` stitches broken tracks, drops short ones and renumbers IDs.
   - It also writes `tracks.json` and draws the blob video **from polygons only**.
 - `src/blob_tool/pose.py`: top-down RTMPose-m (rtmlib/ONNX) on each tracked blob's box, so skeletons share the blob ID and colour. Writes `poses.json`. Weights are in `models/rtmlib/` (via `TORCH_HOME`).
-- `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α) + optional pitch shift.
+- `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α) + pitch shift. By default α and pitch are drawn from the job seed (`voice.draw`), plus a −45 dB noise floor; `randomize=False` uses fixed slider values.
 - `src/blob_tool/jobs.py`: job dirs in `workspace/<id>/`, one sequential worker thread, `PUBLIC_FILES` allow-list.
 - `src/blob_tool/llm.py`: Gemini comparison. One isolated request per version (new client, upload streamed as `video.mp4`, `generate_content`, delete). `LlmManager` has its own worker thread and stores runs in `workspace/<id>/llm/<run>.json`.
 - `src/blob_tool/app.py`: FastAPI. `/api/config` (includes `llm` status), `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, `/api/jobs/{id}/llm[/{run}]`, plus the static `web/`.
@@ -54,7 +54,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 ## Invariants — do not break
 
 - **No original pixels in outputs.** Blob and pose frames are drawn only from simplified polygons and keypoints on `BACKGROUND_BGR`. `tests/test_render.py` asserts this. `STAGE_BG` in `web/app.js` and `--stage-bg` in `style.css` must match `BACKGROUND_BGR`.
-- **One fixed α per recording** for the voice transform. This keeps speakers distinguishable for diarization, so do not randomise it per utterance.
+- **One fixed α per recording** for the voice transform. This keeps speakers distinguishable for diarization, so do not randomise it per utterance. The seed picks that one α (and pitch) per recording.
+- **The seed is secret.** `PipelineParams.seed` (drawn with `secrets` when empty) lives only in the local `job.json`. Never write it, or the α/pitch it draws, into a served file, `tracks.json`, `poses.json`, a job `result` or an LLM request (`test_pipeline_smoke.py` checks the JSON outputs).
 - **Originals are deletable.** The raw upload is always deleted after processing. `original.mp4`/`original.wav` exist only for before/after comparison and are removed by "discard original".
 - **Never commit media or weights.** `workspace/`, `samples/`, `models/`, `*.pt` are gitignored. Footage of children must never enter git.
 - Keep the phone path in mind: prefer CoreML-exportable models and streaming-friendly (frame/buffer-based) processing.

@@ -140,6 +140,9 @@ class JobManager:
         src = next(job.dir.glob("input.*"))
         try:
             params = pipeline.PipelineParams.from_dict(job.params)
+            if params.seed is None:  # kept only in this local job.json, never in a served file
+                params.seed = pipeline.new_seed()
+                job.params["seed"] = params.seed
             job.result = pipeline.run(src, job.dir, params, progress)
             job.status, job.progress, job.message = "done", 1.0, "done"
             if job.params.get("discard_original"):

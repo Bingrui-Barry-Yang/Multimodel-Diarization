@@ -112,9 +112,13 @@ function collectParams() {
     },
     blob: { style: $("style").value, smooth: parseFloat($("smooth").value) },
     pose: { enabled: $("pose").checked },
-    voice: { mcadams_alpha: parseFloat($("alpha").value), pitch_semitones: parseFloat($("pitch").value) },
+    voice: { randomize: !$("voice-fixed").checked, mcadams_alpha: parseFloat($("alpha").value),
+             pitch_semitones: parseFloat($("pitch").value) },
+    seed: $("seed").value.trim() || null,
   };
 }
+
+$("voice-fixed").addEventListener("change", (e) => ($("voice-fixed-fields").hidden = !e.target.checked));
 
 /* ----------------------------------------------------------------- upload */
 
@@ -136,6 +140,7 @@ document.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfe
 
 $("process-btn").addEventListener("click", async () => {
   if (!state.file) return;
+  if (!/^\d*$/.test($("seed").value.trim())) { alert("The seed must be a whole number, or empty for a random one."); return; }
   const btn = $("process-btn");
   btn.disabled = true;
   btn.textContent = "Uploading…";

@@ -133,7 +133,7 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 
 ## Using the UI
 
-1. Drop a video (or click to choose one). Pick the objects to blob (default `person`), the blob style and the voice settings, then click **Process**.
+1. Drop a video (or click to choose one). Pick the objects to blob (default `person`) and the blob style, optionally enter a seed (empty = a fresh secret one; see [Voice alteration](#voice-alteration)), then click **Process**.
 2. When it finishes:
    - **Original / Blobs / Pose / Blobs+Pose / Overlay / Split** (keys `1`–`6`) switch the view. Pose and Blobs+Pose play the rendered stick-figure videos; Overlay draws blobs and skeletons over the original. Split has a draggable before/after divider.
    - **Seek bar**: the strip behind it shows how many objects are visible over time. The selected object's presence is drawn as a coloured line on top.
@@ -179,7 +179,11 @@ Skeletons are drawn from keypoints only (`render.draw_skeletons`): in the blob's
 
 `voice.py` implements the **McAdams-coefficient** anonymiser, the signal-processing baseline of the [VoicePrivacy Challenge](https://www.voiceprivacychallenge.org/). Each 20 ms frame is LPC-analysed, every formant pole angle φ becomes φ^α, and the residual is re-filtered. It needs no training data, runs faster than real time on a CPU, and is simple enough for AVAudioEngine/Core Audio on a phone.
 
-The **same α is used for the whole recording**, so all speakers move through the same transform and stay distinguishable from each other. On the AMI sample, pairwise speaker distances (coarse spectral envelope) are preserved while the waveform correlation with the original drops to about 0.23. A per-utterance random α would hide identity more strongly, but it would break diarization. McAdams is a *light* anonymiser: an attacker who knows the method can partly invert it. For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
+The **same α is used for the whole recording**, so all speakers move through the same transform and stay distinguishable from each other. On the AMI sample, pairwise speaker distances (coarse spectral envelope) are preserved while the waveform correlation with the original drops to about 0.23. A per-utterance random α would hide identity more strongly, but it would break diarization.
+
+**Seed.** By default α (0.65–0.85) and a pitch shift (±1.5–3.5 semitones, sign included) are drawn from a **secret per-job seed**, together with a noise floor 45 dB below the peak. Leave the seed field empty and a new 63-bit seed is generated with `secrets`; enter a number only to reproduce a run. The seed is stored only in the local `workspace/<job>/job.json` (the UI reads it through the local API) and never in a served file, `tracks.json`, `poses.json` or an LLM request, and the drawn α and pitch are not written anywhere either. So whoever receives the audio does not know which inverse transform to apply, and the noise floor plus the overlap-add pitch shift make a sample-exact inverse impossible. *Fixed voice values (no seed)* restores the old sliders for controlled experiments; known values are easy to undo.
+
+This hides the parameters; it is **not a cryptographic guarantee**. McAdams is a *light* anonymiser: an attacker who knows the method can search the two values by ear and partly invert it [5, 6]. For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
 
 ## LLM comparison
 

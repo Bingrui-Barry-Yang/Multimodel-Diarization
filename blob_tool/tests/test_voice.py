@@ -1,6 +1,8 @@
 import numpy as np
 
-from blob_tool.voice import VoiceParams, anonymize, mcadams, pitch_shift
+import pytest
+
+from blob_tool.voice import ALPHA_RANGE, PITCH_RANGE, VoiceParams, anonymize, draw, mcadams, pitch_shift
 
 SR = 16000
 
@@ -40,7 +42,7 @@ def test_mcadams_keeps_length_and_changes_spectrum():
 
 def test_same_alpha_keeps_two_speakers_apart():
     a, b = vowel(f0=110, formants=(650, 1100, 2500)), vowel(f0=220, formants=(850, 1500, 2900))
-    p = VoiceParams(mcadams_alpha=0.8)
+    p = VoiceParams(randomize=False, mcadams_alpha=0.8)
     ca, cb = spectral_centroid(anonymize(a, SR, p)), spectral_centroid(anonymize(b, SR, p))
     assert abs(ca - cb) > 0.5 * abs(spectral_centroid(a) - spectral_centroid(b))
 
@@ -56,3 +58,25 @@ def test_pitch_shift_length_and_direction():
         return SR / (lo + np.argmax(ac[lo:hi]))
 
     assert f0(y) > f0(x) * 1.15
+
+
+def test_seed_fixes_the_transform():
+    x = vowel()
+    p = VoiceParams()
+    np.testing.assert_array_equal(anonymize(x, SR, p, seed=7), anonymize(x, SR, p, seed=7))
+    assert not np.allclose(anonymize(x, SR, p, seed=7), anonymize(x, SR, p, seed=8))
+    params = {draw(s) for s in range(50)}
+    assert len(params) == 50
+    for alpha, st in params:
+        assert ALPHA_RANGE[0] <= alpha <= ALPHA_RANGE[1] and PITCH_RANGE[0] <= abs(st) <= PITCH_RANGE[1]
+    assert {st > 0 for _, st in params} == {True, False}
+
+
+def test_randomised_voice_needs_a_seed_and_fixed_values_ignore_it():
+    x = vowel()
+    with pytest.raises(ValueError):
+        anonymize(x, SR, VoiceParams())
+    fixed = VoiceParams(randomize=False, mcadams_alpha=0.8, pitch_semitones=2.0)
+    np.testing.assert_array_equal(anonymize(x, SR, fixed, seed=1), anonymize(x, SR, fixed, seed=2))
+    expected = np.clip(pitch_shift(mcadams(x, SR, 0.8), SR, 2.0), -1, 1)
+    np.testing.assert_array_equal(anonymize(x, SR, fixed), expected)

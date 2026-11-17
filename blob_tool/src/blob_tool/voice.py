@@ -9,6 +9,12 @@ each other (useful for diarization) while no longer sounding like themselves.
 
 An optional pitch shift (resample, then overlap-add time stretch back to the
 original length) is applied afterwards.
+
+By default alpha and the pitch shift are drawn from a per-recording secret seed, so
+whoever gets the audio does not know which inverse transform to apply. A faint noise
+floor from the same seed makes sample-exact inverse filtering impossible. This hides
+the parameters; it is not cryptographic: an attacker can still search the two values
+by ear (McAdams is weak against informed attackers in the VoicePrivacy evaluations).
 """
 
 from __future__ import annotations
@@ -20,8 +26,15 @@ from scipy.linalg import solve_toeplitz
 from scipy.signal import lfilter, resample
 
 
+ALPHA_RANGE = (0.65, 0.85)
+PITCH_RANGE = (1.5, 3.5)  # semitones; the sign is drawn too
+NOISE_DB = -45.0  # noise floor relative to the signal peak
+VOICE_STREAM, NOISE_STREAM = 1, 2  # sub-streams of the job seed
+
+
 @dataclass
 class VoiceParams:
+    randomize: bool = True  # draw alpha and pitch from the seed; False uses the fixed values below
     mcadams_alpha: float = 0.8  # 1.0 = unchanged; VPC baseline samples 0.5–0.9
     pitch_semitones: float = 0.0
     lpc_order: int = 20
@@ -101,7 +114,25 @@ def pitch_shift(signal: np.ndarray, sample_rate: int, semitones: float) -> np.nd
     return (out / norm)[: len(signal)].astype(np.float32)
 
 
-def anonymize(signal: np.ndarray, sample_rate: int, params: VoiceParams) -> np.ndarray:
-    y = mcadams(signal, sample_rate, params.mcadams_alpha, params.lpc_order, params.frame_ms)
-    y = pitch_shift(y, sample_rate, params.pitch_semitones)
+def draw(seed: int) -> tuple[float, float]:
+    """The (alpha, semitones) pair a seed stands for: one fixed transform for the whole recording."""
+    rng = np.random.default_rng([seed, VOICE_STREAM])
+    alpha = float(rng.uniform(*ALPHA_RANGE))
+    semitones = float(rng.uniform(*PITCH_RANGE) * rng.choice([-1.0, 1.0]))
+    return alpha, semitones
+
+
+def anonymize(signal: np.ndarray, sample_rate: int, params: VoiceParams, seed: int | None = None) -> np.ndarray:
+    if params.randomize:
+        if seed is None:
+            raise ValueError("randomised voice needs a seed")
+        alpha, semitones = draw(seed)
+    else:
+        alpha, semitones = params.mcadams_alpha, params.pitch_semitones
+    y = mcadams(signal, sample_rate, alpha, params.lpc_order, params.frame_ms)
+    y = pitch_shift(y, sample_rate, semitones)
+    if params.randomize:
+        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        noise = np.random.default_rng([seed, NOISE_STREAM]).standard_normal(len(y))
+        y = y + (peak * 10 ** (NOISE_DB / 20) * noise).astype(np.float32)
     return np.clip(y, -1.0, 1.0)
