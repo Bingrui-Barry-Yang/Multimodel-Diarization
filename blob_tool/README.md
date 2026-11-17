@@ -4,7 +4,7 @@ A privacy filter for classroom video. It turns every person (or any other object
 
 ```
 raw video ──► normalise (CFR H.264) ──► detect + segment + track ──► smooth & simplify outlines ──► processed.mp4
-          └─► audio 16 kHz mono ──► McAdams formant shift (+ optional pitch) ───────────────────────┘  (blobs + altered voice)
+          └─► audio 16 kHz mono ──► McAdams formant shift (seeded α)         ───────────────────────┘  (blobs + altered voice)
                                                                                 tracks.json (per-frame polygons, IDs)
                      tracked boxes ──► RTMPose (top-down) ──► poses.json ──► pose.mp4, blobpose.mp4 (+ altered voice)
    opt-in, after processing: original + tracks + poses ──► blur.py ──► blurred.mp4, faceblur.mp4 (+ altered voice)
@@ -200,9 +200,9 @@ Why the strong version cannot be undone: the output is a function of the downsam
 
 The **same α is used for the whole recording**, so all speakers move through the same transform and stay distinguishable from each other. On the AMI sample, pairwise speaker distances (coarse spectral envelope) are preserved while the waveform correlation with the original drops to about 0.23. A per-utterance random α would hide identity more strongly, but it would break diarization.
 
-**Seed.** By default α (0.65–0.85) and a pitch shift (±1.5–3.5 semitones, sign included) are drawn from a **secret per-job seed**, together with a noise floor 45 dB below the peak. Leave the seed field empty and a new 63-bit seed is generated with `secrets`; enter a number only to reproduce a run. The seed is stored only in the local `workspace/<job>/job.json` (the UI reads it through the local API) and never in a served file, `tracks.json`, `poses.json` or an LLM request, and the drawn α and pitch are not written anywhere either. So whoever receives the audio does not know which inverse transform to apply, and the noise floor plus the overlap-add pitch shift make a sample-exact inverse impossible. *Fixed voice values (no seed)* restores the old sliders for controlled experiments; known values are easy to undo.
+**Seed.** By default α is drawn from a **secret per-job seed** in 0.75–0.90 (milder than the VoicePrivacy range of 0.5–0.9, so classroom speech stays intelligible), with no pitch shift, plus a noise floor 45 dB below the peak. Leave the seed field empty and a new 63-bit seed is generated with `secrets`; enter a number only to reproduce a run. The seed is stored only in the local `workspace/<job>/job.json` (the UI reads it through the local API) and never in a served file, `tracks.json`, `poses.json` or an LLM request, and the drawn α is not written anywhere either. So whoever receives the audio does not know which inverse transform to apply, and the noise floor makes a sample-exact inverse impossible. An earlier version also drew a random pitch shift: it did not make inversion meaningfully harder (it only adds a second value to search), and the simple overlap-add shifter made speech grainy and hard to understand, so pitch is now only shifted with fixed values. *Fixed voice values (no seed)* restores the old sliders for controlled experiments; known values are easy to undo.
 
-This hides the parameters; it is **not a cryptographic guarantee**. McAdams is a *light* anonymiser: an attacker who knows the method can search the two values by ear and partly invert it [5, 6]. For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
+This hides the parameter; it is **not a cryptographic guarantee**. McAdams is a *light* anonymiser: an attacker who knows the method can search α by ear and partly invert it [5, 6]. Making the voice truly unrecoverable needs neural voice conversion (below). For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
 
 ## LLM comparison
 

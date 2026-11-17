@@ -45,7 +45,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
   - It also writes `tracks.json` and draws the blob video **from polygons only**.
 - `src/blob_tool/pose.py`: top-down RTMPose-m (rtmlib/ONNX) on each tracked blob's box, so skeletons share the blob ID and colour. Writes `poses.json`. Weights are in `models/rtmlib/` (via `TORCH_HOME`).
 - `src/blob_tool/blur.py`: opt-in blurred versions of a finished job (`POST /api/jobs/{id}/blur`, queued as a `blur` task in `jobs.py`, run by `pipeline.blur` from `original.mp4` + `tracks.json` + `poses.json`). `strong` → `blurred.mp4` (whole-frame downsample to `detail` px, head block means + seeded noise, blob outlines); `face` → `faceblur.mp4` (Gaussian on heads only, the Li et al. AIED 2026 baseline, weak). Head box = top of blob ∪ head-keypoint box. Detection/pose always use the clear video; only the output is blurred.
-- `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α) + pitch shift. By default α and pitch are drawn from the job seed (`voice.draw`), plus a −45 dB noise floor; `randomize=False` uses fixed slider values.
+- `src/blob_tool/voice.py`: McAdams formant shift (LPC pole angle^α). By default α ∈ [0.75, 0.90] is drawn from the job seed (`voice.draw`) with no pitch shift, plus a −45 dB noise floor; `randomize=False` uses fixed α/pitch slider values.
 - `src/blob_tool/jobs.py`: job dirs in `workspace/<id>/`, one sequential worker thread for both `process` and `blur` tasks (`job.tasks` tracks blur status), `PUBLIC_FILES` allow-list.
 - `src/blob_tool/llm.py`: Gemini comparison. One isolated request per version (new client, upload streamed as `video.mp4`, `generate_content`, delete). `LlmManager` has its own worker thread and stores runs in `workspace/<id>/llm/<run>.json`.
 - `src/blob_tool/app.py`: FastAPI. `/api/config` (includes `llm` status), `/api/jobs` (CRUD), `/api/jobs/{id}/files/{name}` (Range-capable), `/api/jobs/{id}/discard-original`, `/api/jobs/{id}/blur`, `/api/jobs/{id}/llm[/{run}]`, plus the static `web/`.
@@ -55,8 +55,8 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 ## Invariants — do not break
 
 - **No original pixels in blob/pose outputs.** Blob and pose frames are drawn only from simplified polygons and keypoints on `BACKGROUND_BGR`. `tests/test_render.py` asserts this. The blurred videos are the only opt-in exception: `blurred.mp4` must stay a function of the ≤`detail` px downsample plus head block means (`tests/test_blur.py` checks fine detail cannot change it), and both blurred files count as sensitive in `llm.SENSITIVE` (never pre-selected, `confirm_original` required). `STAGE_BG` in `web/app.js` and `--stage-bg` in `style.css` must match `BACKGROUND_BGR`.
-- **One fixed α per recording** for the voice transform. This keeps speakers distinguishable for diarization, so do not randomise it per utterance. The seed picks that one α (and pitch) per recording.
-- **The seed is secret.** `PipelineParams.seed` (drawn with `secrets` when empty) lives only in the local `job.json`. Never write it, or the α/pitch it draws, into a served file, `tracks.json`, `poses.json`, a job `result` or an LLM request (`test_pipeline_smoke.py` checks the JSON outputs).
+- **One fixed α per recording** for the voice transform. This keeps speakers distinguishable for diarization, so do not randomise it per utterance. The seed picks that one α per recording.
+- **The seed is secret.** `PipelineParams.seed` (drawn with `secrets` when empty) lives only in the local `job.json`. Never write it, or the α it draws, into a served file, `tracks.json`, `poses.json`, a job `result` or an LLM request (`test_pipeline_smoke.py` checks the JSON outputs).
 - **Originals are deletable.** The raw upload is always deleted after processing. `original.mp4`/`original.wav` exist only for before/after comparison and are removed by "discard original" (blurred videos stay; discard is refused while a blur task runs).
 - **Never commit media or weights.** `workspace/`, `samples/`, `models/`, `*.pt` are gitignored. Footage of children must never enter git.
 - Keep the phone path in mind: prefer CoreML-exportable models and streaming-friendly (frame/buffer-based) processing.
@@ -78,6 +78,7 @@ print(pipeline.run(Path('samples/x.mp4'), Path('workspace/x'), pipeline.Pipeline
 - Headless Chrome screenshots do not paint `<video>` layers, and seek events do not fire under `--virtual-time-budget`. Check playback in a real browser.
 - ClassBank media need a free TalkBank login, so they are downloaded by hand, not by `make sample-data`. The license is CC BY-NC-SA 4.0 and every use must cite the corpus reference on its page (`CORPORA` in `build_samples.py`).
 - Pexels clips were dropped: they have no usable classroom audio and no ground truth.
+- Do not shift pitch in the seeded voice path: the overlap-add `pitch_shift` (no phase alignment) makes speech grainy and unintelligible on classroom audio, and a secret pitch adds little against inversion.
 - One-stage RTMO (rtmlib) misses most small students in low-res clips, and its default `score_thr` of 0.7 is far too high. That is why pose is top-down on the tracker boxes.
 - `rtmlib` pulls in `opencv-python` and `opencv-contrib-python` next to `opencv-python-headless`. They are all the same version, so `cv2` works, but keep them in step if you pin OpenCV.
 - AMI `ES2002a` is a 352×288 fisheye. Track fragmentation there (~24 IDs for 4 people) comes from the source quality, not a pipeline bug.
