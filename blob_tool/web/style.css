@@ -225,6 +225,16 @@ button.link { background: none; border: 0; color: var(--accent); cursor: pointer
 .llm-card .answer { white-space: pre-wrap; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .llm-card .answer.error { color: var(--danger); }
 
+/* blur dialog */
+.blur-dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; width: min(460px, calc(100vw - 32px));
+}
+.blur-dialog::backdrop { background: rgba(0, 0, 0, .55); }
+.blur-dialog .field label.check { align-items: flex-start; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+.dialog-actions .primary { width: auto; padding: 7px 14px; }
+
 @media (max-width: 1100px) {
   .viewer-body { grid-template-columns: 1fr; }
   .objects { max-height: none; }

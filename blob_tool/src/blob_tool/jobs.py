@@ -1,6 +1,7 @@
 """Job store: one directory per job, processed one at a time by a background worker.
 
-Models hold GPU memory and are not thread-safe, so jobs run strictly sequentially.
+Models hold GPU memory and are not thread-safe, so jobs run strictly sequentially. Follow-up
+tasks on a finished job (the opt-in blurred videos) go through the same queue.
 """
 
 from __future__ import annotations
@@ -17,12 +18,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import pipeline
+from .blur import METHODS as BLUR_METHODS
+from .blur import BlurParams
 
 WORKSPACE = Path(os.environ.get("BLOB_WORKSPACE", Path(__file__).resolve().parents[2] / "workspace"))
 
 # files a job may serve; anything else in the job dir is private
 PUBLIC_FILES = {"original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json",
-                "poses.json", "pose.mp4", "blobpose.mp4"}
+                "poses.json", "pose.mp4", "blobpose.mp4", *BLUR_METHODS.values()}
 ORIGINAL_FILES = ("original.mp4", "original.wav")
 
 
@@ -41,6 +44,7 @@ class Job:
     result: dict | None = None
     original_discarded: bool = False
     files: list[str] = field(default_factory=list)
+    tasks: dict[str, dict] = field(default_factory=dict)  # blur method → {status, progress, message, error}
 
     @property
     def dir(self) -> Path:
@@ -62,7 +66,7 @@ class JobManager:
         WORKSPACE.mkdir(parents=True, exist_ok=True)
         self.jobs: dict[str, Job] = {}
         self.lock = threading.Lock()
-        self.queue: queue.Queue[str] = queue.Queue()
+        self.queue: queue.Queue[tuple[str, str, dict | None]] = queue.Queue()  # (kind, job id, params)
         self._load_existing()
         threading.Thread(target=self._worker, daemon=True, name="blob-worker").start()
 
@@ -74,6 +78,10 @@ class JobManager:
                 continue
             if job.status in ("queued", "running"):  # server restarted mid-job
                 job.status, job.error = "error", "interrupted by server restart"
+            for task in job.tasks.values():
+                if task["status"] in ("queued", "running"):
+                    task.update(status="error", error="interrupted by server restart")
+            if job.dir.exists():
                 job.save()
             self.jobs[job.id] = job
 
@@ -85,7 +93,7 @@ class JobManager:
         job.save()
         with self.lock:
             self.jobs[job.id] = job
-        self.queue.put(job.id)
+        self.queue.put(("process", job.id, None))
         return job
 
     def list(self) -> list[Job]:
@@ -94,9 +102,13 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self.jobs.get(job_id)
 
+    @staticmethod
+    def _busy(job: Job) -> bool:
+        return job.status == "running" or any(t["status"] in ("queued", "running") for t in job.tasks.values())
+
     def delete(self, job_id: str) -> bool:
         job = self.jobs.get(job_id)
-        if job is None or job.status == "running":
+        if job is None or self._busy(job):
             return False
         shutil.rmtree(job.dir, ignore_errors=True)
         with self.lock:
@@ -104,9 +116,9 @@ class JobManager:
         return True
 
     def discard_original(self, job_id: str) -> Job | None:
-        """Privacy mode: delete every file that contains original pixels or voice."""
+        """Privacy mode: delete the full-quality original video and voice. Blurred versions stay: they are outputs."""
         job = self.jobs.get(job_id)
-        if job is None or job.status != "done":
+        if job is None or job.status != "done" or self._busy(job):  # a blur may be reading the original
             return None
         for name in ORIGINAL_FILES:
             (job.dir / name).unlink(missing_ok=True)
@@ -114,13 +126,60 @@ class JobManager:
         job.save()
         return job
 
+    def blur(self, job_id: str, params: dict) -> Job:
+        """Queue an opt-in blurred version of a finished job. Raises ValueError when not possible."""
+        job = self.jobs.get(job_id)
+        if job is None:
+            raise ValueError("job not found")
+        bp = BlurParams(**params)
+        if job.status != "done":
+            raise ValueError("job is not finished")
+        if job.original_discarded or not (job.dir / "original.mp4").exists():
+            raise ValueError("the original was discarded, so there is nothing to blur")
+        if job.tasks.get(bp.method, {}).get("status") in ("queued", "running"):
+            raise ValueError(f"a {bp.method} blur is already queued")
+        job.tasks[bp.method] = {"status": "queued", "progress": 0.0, "message": "", "error": None}
+        job.save()
+        self.queue.put(("blur", job.id, params))
+        return job
+
     def _worker(self) -> None:
         while True:
-            job_id = self.queue.get()
+            kind, job_id, params = self.queue.get()
             job = self.jobs.get(job_id)
             if job is None:
                 continue
-            self._run(job)
+            if kind == "blur":
+                self._blur(job, BlurParams(**params))
+            else:
+                self._run(job)
+
+    def _blur(self, job: Job, params: BlurParams) -> None:
+        task = job.tasks[params.method]
+        task["status"] = "running"
+        job.save()
+        last_save = 0.0
+
+        def progress(frac: float, message: str) -> None:
+            nonlocal last_save
+            task["progress"], task["message"] = min(frac, 1.0), message
+            if time.time() - last_save > 1.0:
+                last_save = time.time()
+                job.save()
+
+        try:
+            seed = job.params.get("seed")
+            if seed is None:  # job from before seeds existed
+                seed = job.params["seed"] = pipeline.new_seed()
+            min_score = pipeline.PipelineParams.from_dict(job.params).pose.min_score
+            pipeline.blur(job.dir, params, seed, min_score, progress)
+            task.update(status="done", progress=1.0, message="done", error=None)
+        except Exception as e:
+            traceback.print_exc()
+            task.update(status="error", error=f"{type(e).__name__}: {e}")
+        finally:
+            if job.dir.exists():
+                job.save()
 
     def _run(self, job: Job) -> None:
         job.status = "running"

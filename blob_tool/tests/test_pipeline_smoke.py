@@ -104,6 +104,24 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     assert ok and frame.mean() < 120
 
 
+def test_blur_after_processing(tmp_path, synthetic_video, monkeypatch):
+    from blob_tool.blur import BlurParams
+
+    monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
+    monkeypatch.setattr(pipeline, "estimate_poses", fake_poses)
+    out = tmp_path / "job"
+    params = pipeline.PipelineParams()
+    pipeline.run(synthetic_video, out, params, lambda *a: None)
+    for method, name in (("strong", "blurred.mp4"), ("face", "faceblur.mp4")):
+        assert pipeline.blur(out, BlurParams(method=method), params.seed, 0.3, lambda *a: None) == name
+        info = media.probe(out / name)
+        assert (info.width, info.height) == (W, H) and info.has_audio and info.frames >= N - 1
+    assert not list(out.glob("*_raw.mp4"))
+    (out / "original.mp4").unlink()
+    with pytest.raises(FileNotFoundError):
+        pipeline.blur(out, BlurParams(), params.seed, 0.3, lambda *a: None)
+
+
 def test_pose_can_be_turned_off(tmp_path, synthetic_video, monkeypatch):
     monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
     monkeypatch.setattr(pipeline, "estimate_poses", lambda *a: pytest.fail("pose ran while disabled"))

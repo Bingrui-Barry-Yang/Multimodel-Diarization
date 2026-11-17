@@ -9,6 +9,8 @@ Outputs in the job directory:
   poses.json      per-frame COCO-17 keypoints per blob ID (pose enabled)
   pose.mp4        stick figures only + anonymised audio
   blobpose.mp4    blobs + stick figures + anonymised audio
+  blurred.mp4     strongly blurred original + anonymised audio (opt-in, after processing, see blur.py)
+  faceblur.mp4    original with only the heads blurred + anonymised audio (opt-in, paper baseline)
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from pathlib import Path
 
 import soundfile as sf
 
+from . import blur as blurmod
 from . import media, voice
 from . import pose as posemod
 from .pose import PoseParams
@@ -143,3 +146,26 @@ def run(src: Path, workdir: Path, params: PipelineParams, progress: ProgressFn) 
         "objects": len(store.meta),
         "poses": poses is not None,
     }
+
+
+def blur(workdir: Path, params: blurmod.BlurParams, seed: int, min_score: float,
+         progress: Callable[[float, str], None]) -> str:
+    """Opt-in blurred version of a finished job, from its original and its saved tracks and poses."""
+    original = workdir / "original.mp4"
+    if not original.exists():
+        raise FileNotFoundError("the original was discarded, so there is nothing to blur")
+    store = TrackStore.read_json(workdir / "tracks.json")
+    poses_path = workdir / "poses.json"
+    poses = posemod.read_json(poses_path, store.width, store.height) if poses_path.exists() else None
+    name = blurmod.METHODS[params.method]
+    raw = workdir / name.replace(".mp4", "_raw.mp4")
+    altered = workdir / "altered.wav"
+    try:
+        blurmod.render_video(original, store, poses, params, seed, raw, min_score,
+                             lambda f, m: progress(0.9 * f, m))
+        progress(0.9, f"encoding {name}")
+        media.to_browser_mp4(raw, workdir / name, audio=altered if altered.exists() else None)
+    finally:
+        raw.unlink(missing_ok=True)
+    progress(1.0, "done")
+    return name

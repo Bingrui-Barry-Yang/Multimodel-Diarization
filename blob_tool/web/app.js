@@ -4,9 +4,12 @@ const $ = (id) => document.getElementById(id);
 const STAGE_BG = "#121418"; // must match render.BACKGROUND_BGR
 const STAGES = ["prepare", "track", "pose", "render", "voice", "mux"];
 // which rendered video the processed layer shows in each mode
-const PROC_FILE = { pose: "pose.mp4", blobpose: "blobpose.mp4" };
+const PROC_FILE = { pose: "pose.mp4", blobpose: "blobpose.mp4", blurred: "blurred.mp4", faceblur: "faceblur.mp4" };
 const NEEDS_ORIGINAL = ["original", "overlay", "split"];
 const NEEDS_POSE = ["pose", "blobpose"];
+// opt-in blurred versions, made after processing: blur method → view mode
+const BLUR_MODE = { strong: "blurred", face: "faceblur" };
+const MODES = ["original", "blobs", "pose", "blobpose", "overlay", "split", "blurred", "faceblur"];
 
 const state = {
   config: null,
@@ -25,6 +28,7 @@ const state = {
   split: 50,
   frame: -1,
   hasOriginal: true,
+  fileVersion: {},  // file name → cache-buster after a blurred video is re-made
 };
 
 /* ---------------------------------------------------------------- helpers */
@@ -47,7 +51,13 @@ function fmtTime(t) {
 }
 
 function fileUrl(job, name) {
-  return `/api/jobs/${job.id}/files/${name}`;
+  const v = state.fileVersion[name];
+  return `/api/jobs/${job.id}/files/${name}` + (v ? `?v=${v}` : "");
+}
+
+function jobBusy(j) {
+  return j.status === "queued" || j.status === "running" ||
+    Object.values(j.tasks || {}).some((t) => t.status === "queued" || t.status === "running");
 }
 
 /* --------------------------------------------------------------- settings */
@@ -210,6 +220,18 @@ function openJob(id) {
 function updateJobView(j) {
   if (j.status === "done") {
     if (!state.job || state.job.id !== j.id || state.job.original_discarded !== j.original_discarded) loadViewer(j);
+    else if (JSON.stringify([state.job.files, state.job.tasks]) !== JSON.stringify([j.files, j.tasks])) {
+      const before = state.job.tasks || {};
+      state.job = j;
+      for (const [method, t] of Object.entries(j.tasks || {})) {
+        const name = PROC_FILE[BLUR_MODE[method]];
+        if (t.status === "done" && (before[method] || {}).status !== "done") {
+          state.fileVersion[name] = Date.now();
+          if (vProc.dataset.file === name) { vProc.dataset.file = ""; setProcFile(name); }
+        }
+      }
+      refreshFiles(j);
+    }
     return;
   }
   showView("progress");
@@ -239,7 +261,7 @@ async function poll() {
   try {
     const before = JSON.stringify(state.jobs.map((j) => [j.id, j.status, j.progress]));
     await refreshJobs();
-    const busy = state.jobs.some((j) => j.status === "queued" || j.status === "running");
+    const busy = state.jobs.some(jobBusy);
     const after = JSON.stringify(state.jobs.map((j) => [j.id, j.status, j.progress]));
     setTimeout(poll, busy || before !== after ? 800 : 4000);
   } catch {
@@ -281,7 +303,7 @@ async function loadViewer(job) {
   else vOrig.removeAttribute("src");
   vOrig.load(); vProc.load();
 
-  for (const b of document.querySelectorAll("#mode-seg button")) b.disabled = !modeAvailable(b.dataset.mode);
+  refreshFiles(job);
   for (const b of document.querySelectorAll("#audio-seg button")) {
     b.disabled = (b.dataset.audio === "original" && !(state.hasOriginal && r.has_audio)) ||
                  (b.dataset.audio === "altered" && !r.has_audio);
@@ -289,16 +311,6 @@ async function loadViewer(job) {
   if (!modeAvailable(state.mode)) state.mode = "blobs";
   if (!r.has_audio) state.audio = "mute";
   else if (state.audio === "original" && !state.hasOriginal) state.audio = "altered";
-
-  $("dl-video").href = fileUrl(job, "processed.mp4");
-  $("dl-tracks").href = fileUrl(job, "tracks.json");
-  $("dl-audio").href = fileUrl(job, "altered.wav");
-  $("dl-audio").setAttribute("aria-disabled", String(!job.files.includes("altered.wav")));
-  for (const [id, name] of [["dl-pose", "pose.mp4"], ["dl-blobpose", "blobpose.mp4"], ["dl-poses", "poses.json"]]) {
-    $(id).href = fileUrl(job, name);
-    $(id).hidden = !job.files.includes(name);
-  }
-  $("discard-btn").hidden = !state.hasOriginal;
 
   renderObjectList();
   applyDeepLink();
@@ -308,11 +320,39 @@ async function loadViewer(job) {
   drawPresence();
 }
 
+// mode buttons, downloads and blur state follow the job's files (they change when a blur finishes)
+function refreshFiles(job) {
+  for (const b of document.querySelectorAll("#mode-seg button")) b.disabled = !modeAvailable(b.dataset.mode);
+  $("dl-video").href = fileUrl(job, "processed.mp4");
+  $("dl-tracks").href = fileUrl(job, "tracks.json");
+  $("dl-audio").href = fileUrl(job, "altered.wav");
+  $("dl-audio").setAttribute("aria-disabled", String(!job.files.includes("altered.wav")));
+  for (const [id, name] of [["dl-pose", "pose.mp4"], ["dl-blobpose", "blobpose.mp4"], ["dl-poses", "poses.json"],
+                            ["dl-blurred", "blurred.mp4"], ["dl-faceblur", "faceblur.mp4"]]) {
+    $(id).href = fileUrl(job, name);
+    $(id).hidden = !job.files.includes(name);
+  }
+  $("discard-btn").hidden = !state.hasOriginal;
+  const busy = jobBusy(job);
+  $("discard-btn").disabled = busy;
+  $("blur-btn").disabled = !state.hasOriginal;
+  $("blur-btn").title = state.hasOriginal ? "Make a blurred version of the original: motion and outlines stay, faces go"
+    : "The original was deleted, so there is nothing to blur";
+  const parts = [];
+  for (const [method, t] of Object.entries(job.tasks || {})) {
+    const label = method === "strong" ? "Blur" : "Face blur";
+    if (t.status === "running") parts.push(`${label} ${Math.round(t.progress * 100)}%`);
+    else if (t.status === "queued") parts.push(`${label} queued`);
+    else if (t.status === "error") parts.push(`${label} failed: ${t.error}`);
+  }
+  $("blur-status").textContent = parts.join(" · ");
+}
+
 // #job=<id>&mode=overlay&t=4.2&sel=3&llm=1 — shareable view state
 function applyDeepLink() {
   const p = new URLSearchParams(location.hash.slice(1));
   const mode = p.get("mode");
-  if (["original", "blobs", "pose", "blobpose", "overlay", "split"].includes(mode) && modeAvailable(mode)) state.mode = mode;
+  if (MODES.includes(mode) && modeAvailable(mode)) state.mode = mode;
   const sel = parseInt(p.get("sel"), 10);
   if (state.tracks.objects.some((o) => o.id === sel)) selectObject(sel);
   if (p.get("llm") === "1") openLlm();
@@ -332,6 +372,7 @@ function frameAt(t) {
 }
 
 function modeAvailable(mode) {
+  if (Object.values(BLUR_MODE).includes(mode)) return !!state.job && state.job.files.includes(PROC_FILE[mode]);
   return !(NEEDS_ORIGINAL.includes(mode) && !state.hasOriginal) && !(NEEDS_POSE.includes(mode) && !state.hasPose);
 }
 
@@ -356,7 +397,8 @@ function setMode(mode) {
   $("split-handle").hidden = mode !== "split";
   applySplit();
   $("stage-badge").textContent = { original: "ORIGINAL", blobs: "PROCESSED", pose: "POSE", blobpose: "BLOBS + POSE",
-                                   overlay: "OVERLAY", split: "ORIGINAL ◀ ▶ PROCESSED" }[mode];
+                                   overlay: "OVERLAY", split: "ORIGINAL ◀ ▶ PROCESSED", blurred: "BLURRED",
+                                   faceblur: "FACE BLUR (WEAK)" }[mode];
   draw(true);
 }
 
@@ -430,7 +472,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") { e.preventDefault(); stepFrames(e.shiftKey ? -10 : -1); }
   else if (e.key === "ArrowRight") { e.preventDefault(); stepFrames(e.shiftKey ? 10 : 1); }
   else if (e.key === "Escape") selectObject(null);
-  else if ("123456".includes(e.key)) {
+  else if ("12345678".includes(e.key)) {
     const b = document.querySelectorAll("#mode-seg button")[+e.key - 1];
     if (b && !b.disabled) setMode(b.dataset.mode);
   }
@@ -704,10 +746,43 @@ $("discard-btn").onclick = async () => {
   } catch (err) { alert(err.message); }
 };
 
+/* ------------------------------------------------------------ blur */
+
+function blurMethod() { return document.querySelector("input[name=blur-method]:checked").value; }
+function updateBlurDialog() {
+  const face = blurMethod() === "face";
+  $("blur-strong-fields").hidden = face;
+  $("blur-face-warn").hidden = !face;
+}
+for (const r of document.querySelectorAll("input[name=blur-method]")) r.addEventListener("change", updateBlurDialog);
+for (const [id, fmt] of [["blur-detail", (v) => `${v} px`], ["blur-blocks", (v) => `${v}×${v}`]]) {
+  const input = $(id), out = $(`${id}-out`);
+  const upd = () => (out.textContent = fmt(input.value));
+  input.addEventListener("input", upd);
+  upd();
+}
+$("blur-btn").onclick = () => { if (!$("blur-btn").disabled) { pauseBoth(); updateBlurDialog(); $("blur-dialog").showModal(); } };
+$("blur-dialog").addEventListener("close", async () => {
+  if ($("blur-dialog").returnValue !== "run") return;
+  try {
+    const job = await api(`/api/jobs/${state.job.id}/blur`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: blurMethod(), detail: parseInt($("blur-detail").value, 10),
+                             head_blocks: parseInt($("blur-blocks").value, 10), outlines: $("blur-outlines").checked }),
+    });
+    updateJobView(job);
+    refreshJobs();
+  } catch (err) { alert(`Blur failed: ${err.message}`); }
+});
+
 /* ------------------------------------------------------------ LLM compare */
 
-const LLM_LABELS = { original: "Original", blobs: "Blobs", pose: "Pose", blobpose: "Blobs + Pose" };
-const LLM_FILES = { original: "original.mp4", blobs: "processed.mp4", pose: "pose.mp4", blobpose: "blobpose.mp4" };
+const LLM_LABELS = { original: "Original", blobs: "Blobs", pose: "Pose", blobpose: "Blobs + Pose", blurred: "Blurred",
+                     faceblur: "Face blur" };
+const LLM_FILES = { original: "original.mp4", blobs: "processed.mp4", pose: "pose.mp4", blobpose: "blobpose.mp4",
+                    blurred: "blurred.mp4", faceblur: "faceblur.mp4" };
+function llmSensitive() { return llmCfg().sensitive || ["original"]; }
 const llm = { runId: null, timer: null };
 
 function llmCfg() { return (state.config && state.config.llm) || { available: false, hint: "server config not loaded", models: [], variants: [] }; }
@@ -730,7 +805,7 @@ function openLlm() {
     lab.querySelector("span").textContent = LLM_LABELS[v] + (has ? "" : " (not available)");
     const cb = lab.querySelector("input");
     cb.disabled = !has;
-    cb.checked = has && v !== "original";  // the original is never pre-selected
+    cb.checked = has && !llmSensitive().includes(v);  // versions with original pixels are never pre-selected
     cb.onchange = updateLlmWarn;
     box.append(lab);
   }
@@ -755,9 +830,11 @@ function checkedVariants() {
 }
 
 function updateLlmWarn() {
-  const orig = checkedVariants().includes("original");
-  $("llm-warn").hidden = !orig;
-  if (!orig) $("llm-confirm").checked = false;
+  const picked = checkedVariants().filter((v) => llmSensitive().includes(v));
+  $("llm-warn").hidden = !picked.length;
+  if (!picked.length) $("llm-confirm").checked = false;
+  $("llm-warn-what").textContent = picked.includes("original") ? "The original shows identifiable people."
+    : `${picked.map((v) => LLM_LABELS[v]).join(" and ")} still ${picked.length > 1 ? "contain" : "contains"} original pixels (clothes, bodies, background).`;
 }
 
 async function loadLlmRuns(showLatest = false) {
@@ -822,8 +899,8 @@ $("llm-run").onclick = async () => {
   const variants = checkedVariants();
   if (!variants.length) { $("llm-status").textContent = "Pick at least one version."; return; }
   const confirmOriginal = $("llm-confirm").checked;
-  if (variants.includes("original") && !confirmOriginal) {
-    $("llm-status").textContent = "Tick the confirmation to send the original, or untick Original.";
+  if (variants.some((v) => llmSensitive().includes(v)) && !confirmOriginal) {
+    $("llm-status").textContent = "Tick the confirmation to send the original or blurred versions, or untick them.";
     return;
   }
   $("llm-run").disabled = true;

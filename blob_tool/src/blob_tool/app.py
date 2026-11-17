@@ -25,11 +25,18 @@ manager = JobManager()
 llm_manager = llm.LlmManager(manager)
 
 
+class BlurRequest(BaseModel):
+    method: str = "strong"
+    detail: int = 160
+    head_blocks: int = 3
+    outlines: bool = True
+
+
 class LlmRequest(BaseModel):
     prompt: str
     variants: list[str]
     model: str = llm.MODELS[0]
-    confirm_original: bool = False
+    confirm_original: bool = False  # required for every version in llm.SENSITIVE
 
 
 def _job_or_404(job_id: str):
@@ -90,7 +97,17 @@ def delete_job(job_id: str) -> dict:
 def discard_original(job_id: str) -> dict:
     job = manager.discard_original(job_id)
     if job is None:
-        raise HTTPException(409, "job not found or not finished")
+        raise HTTPException(409, "job not found, not finished, or a blur is still running")
+    return asdict(job)
+
+
+@app.post("/api/jobs/{job_id}/blur")
+def blur_job(job_id: str, req: BlurRequest) -> dict:
+    _job_or_404(job_id)
+    try:
+        job = manager.blur(job_id, req.model_dump())
+    except (TypeError, ValueError) as e:
+        raise HTTPException(409, str(e)) from e
     return asdict(job)
 
 

@@ -106,6 +106,8 @@
             <div id="viewer-meta" class="muted small"></div>
           </div>
           <div class="viewer-actions">
+          <span id="blur-status" class="muted small"></span>
+          <button id="blur-btn" class="btn inline" title="Make a blurred version of the original: motion and outlines stay, faces go">Blur…</button>
           <button id="llm-btn" class="btn inline" title="Ask a video LLM about each version and compare the answers">Compare with LLM</button>
           <div class="seg" id="mode-seg" role="tablist">
             <button data-mode="original">Original</button>
@@ -114,6 +116,8 @@
             <button data-mode="blobpose">Blobs+Pose</button>
             <button data-mode="overlay">Overlay</button>
             <button data-mode="split">Split</button>
+            <button data-mode="blurred" title="Strong blur (make it with Blur…)">Blurred</button>
+            <button data-mode="faceblur" title="Heads-only blur, paper baseline (make it with Blur…)">Face blur</button>
           </div>
           </div>
         </div>
@@ -164,6 +168,8 @@
               <a id="dl-pose" class="btn" download>Pose video</a>
               <a id="dl-blobpose" class="btn" download>Blobs+Pose video</a>
               <a id="dl-poses" class="btn" download>poses.json</a>
+              <a id="dl-blurred" class="btn" download>Blurred video</a>
+              <a id="dl-faceblur" class="btn" download>Face-blur video</a>
               <button id="discard-btn" class="btn danger">Delete original files</button>
             </div>
           </aside>
@@ -171,6 +177,37 @@
       </div>
     </main>
   </div>
+
+  <dialog id="blur-dialog" class="blur-dialog">
+    <form method="dialog">
+      <h2>Blurred version</h2>
+      <p class="hint">Tracking and pose already ran on the clear video; only this output is blurred. It is made from the original, so do it before deleting the original files. The blurred noise comes from this job's seed.</p>
+      <div class="field">
+        <label>Method</label>
+        <label class="check"><input type="radio" name="blur-method" value="strong" checked> Strong: downsampled frame, coarse head blocks, outlines (recommended)</label>
+        <label class="check"><input type="radio" name="blur-method" value="face"> Face blur: Gaussian blur on heads only (paper baseline)</label>
+      </div>
+      <div id="blur-strong-fields">
+        <div class="field">
+          <label for="blur-detail">Detail kept (long side) <output id="blur-detail-out"></output></label>
+          <input id="blur-detail" type="range" min="64" max="320" step="16" value="160">
+          <div class="hint">The whole frame is shrunk to this size and scaled back up. Lower keeps less detail; motion stays visible.</div>
+        </div>
+        <div class="field">
+          <label for="blur-blocks">Blocks across a head <output id="blur-blocks-out"></output></label>
+          <input id="blur-blocks" type="range" min="1" max="6" step="1" value="3">
+        </div>
+        <div class="field">
+          <label class="check"><input id="blur-outlines" type="checkbox" checked> Draw blob outlines (crisp edges, blob colours)</label>
+        </div>
+      </div>
+      <div id="blur-face-warn" class="llm-warn" hidden>Weak protection: models can still recognise blurred faces, and faces the detector missed are left as they are. Use it as the comparison baseline, not for sharing.</div>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn inline">Cancel</button>
+        <button id="blur-run" value="run" class="primary">Make video</button>
+      </div>
+    </form>
+  </dialog>
 
   <div id="llm-panel" class="llm-panel" role="dialog" aria-label="Compare with LLM" hidden>
     <header class="llm-head">
@@ -192,8 +229,8 @@
           <div class="hint">Each version is a separate request with a fresh upload named <code>video.mp4</code> and no chat history, so no answer can see another version.</div>
         </div>
         <div id="llm-warn" class="llm-warn" hidden>
-          <strong>The original shows identifiable people.</strong> On the free Gemini tier Google may use uploaded content to improve its products, and human reviewers may see it. Do not send footage of children without consent.
-          <label class="check"><input id="llm-confirm" type="checkbox"> I understand; send the original in this run</label>
+          <strong id="llm-warn-what">The original shows identifiable people.</strong> On the free Gemini tier Google may use uploaded content to improve its products, and human reviewers may see it. Do not send footage of children without consent.
+          <label class="check"><input id="llm-confirm" type="checkbox"> I understand; send these versions in this run</label>
         </div>
         <div class="field">
           <label for="llm-model">Model</label>

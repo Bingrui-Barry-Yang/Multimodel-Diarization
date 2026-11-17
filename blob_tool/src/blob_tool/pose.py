@@ -89,3 +89,12 @@ def write_json(path: Path, poses: list[PoseRow], width: int, height: int) -> Non
         # frames[i] = [[object_id, x0, y0, s0, x1, y1, s1, …17 keypoints, x/y normalised], …]
         "frames": [[[oid, *flat(k)] for oid, k in row] for row in poses],
     }, separators=(",", ":")))
+
+
+def read_json(path: Path, width: int, height: int) -> list[PoseRow]:
+    def kpts(flat: list[float]) -> np.ndarray:
+        k = np.array(flat, float).reshape(17, 3)
+        k[:, :2] *= [width, height]
+        return k
+
+    return [[(p[0], kpts(p[1:])) for p in row] for row in json.loads(path.read_text())["frames"]]

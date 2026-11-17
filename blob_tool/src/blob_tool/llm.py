@@ -24,7 +24,10 @@ VARIANTS = {  # variant → file in the job dir
     "blobs": "processed.mp4",
     "pose": "pose.mp4",
     "blobpose": "blobpose.mp4",
+    "blurred": "blurred.mp4",
+    "faceblur": "faceblur.mp4",
 }
+SENSITIVE = ("original", "blurred", "faceblur")  # contain original pixels: never pre-selected, confirmed per run
 MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # free tier, video input
 DEFAULT_PROMPT = "Describe what happens in this video and who said what."
 MAX_PROMPT = 4000
@@ -39,7 +42,7 @@ def status() -> dict:
     elif not has_key:
         hint = "put GEMINI_API_KEY=… in blob_tool/.env and restart `make run`"
     return {"available": installed and has_key, "hint": hint, "models": MODELS, "variants": list(VARIANTS),
-            "default_prompt": DEFAULT_PROMPT}
+            "sensitive": list(SENSITIVE), "default_prompt": DEFAULT_PROMPT}
 
 
 def gemini_client():
@@ -113,8 +116,9 @@ class LlmManager:
             raise ValueError(f"unknown model {model!r}")
         if not variants or any(v not in VARIANTS for v in variants):
             raise ValueError(f"variants must be a non-empty subset of {list(VARIANTS)}")
-        if "original" in variants and not confirm_original:
-            raise ValueError("sending the original video needs confirm_original: it shows identifiable people")
+        sensitive = [v for v in variants if v in SENSITIVE]
+        if sensitive and not confirm_original:
+            raise ValueError(f"sending {sensitive} needs confirm_original: these versions contain original pixels")
         missing = [v for v in variants if not (job.dir / VARIANTS[v]).exists()]
         if missing:
             raise ValueError(f"not available for this job: {missing}")

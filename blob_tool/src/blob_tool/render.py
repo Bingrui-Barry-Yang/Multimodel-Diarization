@@ -183,6 +183,20 @@ class TrackStore:
     def write_json(self, path: Path) -> None:
         path.write_text(json.dumps(self.to_json(), separators=(",", ":")))
 
+    @classmethod
+    def read_json(cls, path: Path) -> TrackStore:
+        """A finalised store back from tracks.json (polygons in pixels again)."""
+        d = json.loads(path.read_text())
+        store = cls(d["width"], d["height"], d["fps"])
+        scale = np.array([d["width"], d["height"]], float)
+
+        def poly(flat: list[float]) -> np.ndarray:
+            return (np.array(flat, float).reshape(-1, 2) * scale).round().astype(np.int32)
+
+        store.frames = [[(obj[0], [poly(p) for p in obj[1:]]) for obj in row] for row in d["frames"]]
+        store.meta = {o["id"]: {"label": o["label"]} for o in d["objects"]}
+        return store
+
 
 def _centroid(polys: list[np.ndarray]) -> tuple[float, float]:
     pts = np.vstack(polys).astype(np.float64)
