@@ -71,7 +71,7 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     result = pipeline.run(synthetic_video, out, params, lambda s, f, m: stages.append(s))
 
     assert result["objects"] == 1 and result["has_audio"]
-    assert stages[0] == "prepare" and stages[-1] == "mux"
+    assert stages[0] == "prepare" and stages[-1] == "blur"
     for name in ("original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json",
                  "poses.json", "pose.mp4", "blobpose.mp4"):
         assert (out / name).exists(), name
@@ -104,22 +104,45 @@ def test_pipeline_end_to_end(tmp_path, synthetic_video, monkeypatch):
     assert ok and frame.mean() < 120
 
 
-def test_blur_after_processing(tmp_path, synthetic_video, monkeypatch):
+BLURRED = ("blurred.mp4", "blurred_blobs.mp4", "blurred_pose.mp4", "blurred_blobpose.mp4")
+
+
+def test_blur_at_upload_and_after_processing(tmp_path, synthetic_video, monkeypatch):
     from blob_tool.blur import BlurParams
 
     monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
     monkeypatch.setattr(pipeline, "estimate_poses", fake_poses)
     out = tmp_path / "job"
-    params = pipeline.PipelineParams()
-    pipeline.run(synthetic_video, out, params, lambda *a: None)
-    for method, name in (("strong", "blurred.mp4"), ("face", "faceblur.mp4")):
-        assert pipeline.blur(out, BlurParams(method=method), params.seed, 0.3, lambda *a: None) == name
+    stages = []
+    pipeline.run(synthetic_video, out, pipeline.PipelineParams.from_dict({"blur": {"enabled": True}}),
+                 lambda s, f, m: stages.append(s))
+    assert stages[-1] == "blur"
+    for name in BLURRED:
         info = media.probe(out / name)
-        assert (info.width, info.height) == (W, H) and info.has_audio and info.frames >= N - 1
+        assert (info.width, info.height) == (W, H) and info.has_audio and info.frames >= N - 1, name
     assert not list(out.glob("*_raw.mp4"))
+
+    # the blurred frame keeps the scene (grey background, red disk), unlike the blob video
+    cap = cv2.VideoCapture(str(out / "blurred.mp4"))
+    ok, frame = cap.read()
+    cap.release()
+    assert ok and abs(int(frame[5, W - 5].mean()) - 200) < 10
+
+    for name in BLURRED:
+        (out / name).unlink()
+    assert pipeline.blur(out, BlurParams(enabled=True, strength=4), 0.3, lambda *a: None) == list(BLURRED)
+    assert all((out / n).exists() for n in BLURRED)
     (out / "original.mp4").unlink()
     with pytest.raises(FileNotFoundError):
-        pipeline.blur(out, BlurParams(), params.seed, 0.3, lambda *a: None)
+        pipeline.blur(out, BlurParams(enabled=True), 0.3, lambda *a: None)
+
+
+def test_blur_is_off_by_default(tmp_path, synthetic_video, monkeypatch):
+    monkeypatch.setattr(pipeline, "get_tracker", lambda name: RedBlobTracker())
+    monkeypatch.setattr(pipeline, "estimate_poses", fake_poses)
+    out = tmp_path / "job"
+    pipeline.run(synthetic_video, out, pipeline.PipelineParams(), lambda *a: None)
+    assert not any((out / n).exists() for n in BLURRED)
 
 
 def test_pose_can_be_turned_off(tmp_path, synthetic_video, monkeypatch):

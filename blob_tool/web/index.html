@@ -72,7 +72,18 @@
           </div>
           <div class="field">
             <label class="check"><input id="pose" type="checkbox" checked> Pose estimation (stick figures per blob)</label>
+            <label class="check"><input id="blur" type="checkbox"> Blur: also make lightly blurred videos</label>
             <label class="check"><input id="discard" type="checkbox"> Discard original after processing (phone mode)</label>
+          </div>
+          <div id="blur-fields" hidden>
+            <div class="field">
+              <label for="blur-strength">Blur strength <output id="blur-strength-out"></output></label>
+              <input id="blur-strength" type="range" min="1.5" max="6" step="0.5" value="2.5">
+              <div class="hint">The whole frame is shrunk by this factor and scaled back up: motion and edges stay readable, fine detail is gone for good.</div>
+            </div>
+            <div class="field">
+              <label class="check"><input id="blur-faces" type="checkbox" checked> Extra blur on faces (head-sized, from pose keypoints)</label>
+            </div>
           </div>
         </details>
 
@@ -107,7 +118,8 @@
           </div>
           <div class="viewer-actions">
           <span id="blur-status" class="muted small"></span>
-          <button id="blur-btn" class="btn inline" title="Make a blurred version of the original: motion and outlines stay, faces go">Blur…</button>
+          <button id="reblur" class="link" title="Make the blurred videos again with other settings">Re-blur…</button>
+          <button id="blur-toggle" class="btn inline toggle" aria-pressed="false" title="Show the views on the lightly blurred video (b)">Blur</button>
           <button id="llm-btn" class="btn inline" title="Ask a video LLM about each version and compare the answers">Compare with LLM</button>
           <div class="seg" id="mode-seg" role="tablist">
             <button data-mode="original">Original</button>
@@ -116,8 +128,6 @@
             <button data-mode="blobpose">Blobs+Pose</button>
             <button data-mode="overlay">Overlay</button>
             <button data-mode="split">Split</button>
-            <button data-mode="blurred" title="Strong blur (make it with Blur…)">Blurred</button>
-            <button data-mode="faceblur" title="Heads-only blur, paper baseline (make it with Blur…)">Face blur</button>
           </div>
           </div>
         </div>
@@ -169,7 +179,9 @@
               <a id="dl-blobpose" class="btn" download>Blobs+Pose video</a>
               <a id="dl-poses" class="btn" download>poses.json</a>
               <a id="dl-blurred" class="btn" download>Blurred video</a>
-              <a id="dl-faceblur" class="btn" download>Face-blur video</a>
+              <a id="dl-blurred-blobs" class="btn" download>Blurred + Blobs video</a>
+              <a id="dl-blurred-pose" class="btn" download>Blurred + Pose video</a>
+              <a id="dl-blurred-blobpose" class="btn" download>Blurred + Blobs + Pose video</a>
               <button id="discard-btn" class="btn danger">Delete original files</button>
             </div>
           </aside>
@@ -180,31 +192,19 @@
 
   <dialog id="blur-dialog" class="blur-dialog">
     <form method="dialog">
-      <h2>Blurred version</h2>
-      <p class="hint">Tracking and pose already ran on the clear video; only this output is blurred. It is made from the original, so do it before deleting the original files. The blurred noise comes from this job's seed.</p>
+      <h2>Blurred videos</h2>
+      <p class="hint">Makes the lightly blurred original, alone and under the blobs / pose layers. Tracking and pose already ran on the clear video; only these outputs are blurred. They are made from the original, so do it before deleting the original files.</p>
       <div class="field">
-        <label>Method</label>
-        <label class="check"><input type="radio" name="blur-method" value="strong" checked> Strong: downsampled frame, coarse head blocks, outlines (recommended)</label>
-        <label class="check"><input type="radio" name="blur-method" value="face"> Face blur: Gaussian blur on heads only (paper baseline)</label>
+        <label for="dialog-strength">Blur strength <output id="dialog-strength-out"></output></label>
+        <input id="dialog-strength" type="range" min="1.5" max="6" step="0.5" value="2.5">
+        <div class="hint">The whole frame is shrunk by this factor and scaled back up. Higher hides more; motion and edges stay visible.</div>
       </div>
-      <div id="blur-strong-fields">
-        <div class="field">
-          <label for="blur-detail">Detail kept (long side) <output id="blur-detail-out"></output></label>
-          <input id="blur-detail" type="range" min="64" max="320" step="16" value="160">
-          <div class="hint">The whole frame is shrunk to this size and scaled back up. Lower keeps less detail; motion stays visible.</div>
-        </div>
-        <div class="field">
-          <label for="blur-blocks">Blocks across a head <output id="blur-blocks-out"></output></label>
-          <input id="blur-blocks" type="range" min="1" max="6" step="1" value="3">
-        </div>
-        <div class="field">
-          <label class="check"><input id="blur-outlines" type="checkbox" checked> Draw blob outlines (crisp edges, blob colours)</label>
-        </div>
+      <div class="field">
+        <label class="check"><input id="dialog-faces" type="checkbox" checked> Extra blur on faces (head-sized, from pose keypoints)</label>
       </div>
-      <div id="blur-face-warn" class="llm-warn" hidden>Weak protection: models can still recognise blurred faces, and faces the detector missed are left as they are. Use it as the comparison baseline, not for sharing.</div>
       <div class="dialog-actions">
         <button value="cancel" class="btn inline">Cancel</button>
-        <button id="blur-run" value="run" class="primary">Make video</button>
+        <button id="blur-run" value="run" class="primary">Make videos</button>
       </div>
     </form>
   </dialog>

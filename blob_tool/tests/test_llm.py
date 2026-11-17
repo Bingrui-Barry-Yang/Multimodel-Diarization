@@ -70,7 +70,7 @@ def test_original_needs_explicit_confirmation(job, manager):
     with pytest.raises(ValueError, match="confirm_original"):
         manager.submit(job, "Who speaks?", ["blobs", "original"], llm.MODELS[0], confirm_original=False)
     manager.submit(job, "Who speaks?", ["blobs"], llm.MODELS[0], confirm_original=False)
-    for v in ("blurred", "faceblur"):  # blurred versions still hold original pixels
+    for v in ("blurred", "blurred_blobs", "blurred_pose", "blurred_blobpose"):  # blurred versions still hold original pixels
         with pytest.raises(ValueError, match="confirm_original"):
             manager.submit(job, "Who speaks?", ["pose", v], llm.MODELS[0], confirm_original=False)
 

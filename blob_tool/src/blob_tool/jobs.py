@@ -18,14 +18,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import pipeline
-from .blur import METHODS as BLUR_METHODS
+from .blur import LAYERS as BLUR_FILES
 from .blur import BlurParams
 
 WORKSPACE = Path(os.environ.get("BLOB_WORKSPACE", Path(__file__).resolve().parents[2] / "workspace"))
 
 # files a job may serve; anything else in the job dir is private
 PUBLIC_FILES = {"original.mp4", "original.wav", "altered.wav", "processed.mp4", "tracks.json",
-                "poses.json", "pose.mp4", "blobpose.mp4", *BLUR_METHODS.values()}
+                "poses.json", "pose.mp4", "blobpose.mp4", *BLUR_FILES}
 ORIGINAL_FILES = ("original.mp4", "original.wav")
 
 
@@ -44,7 +44,7 @@ class Job:
     result: dict | None = None
     original_discarded: bool = False
     files: list[str] = field(default_factory=list)
-    tasks: dict[str, dict] = field(default_factory=dict)  # blur method → {status, progress, message, error}
+    tasks: dict[str, dict] = field(default_factory=dict)  # "blur" → {status, progress, message, error}
 
     @property
     def dir(self) -> Path:
@@ -58,7 +58,7 @@ class Job:
 
 
 # share of total progress per stage; tracking and pose dominate
-STAGE_WEIGHTS = {"prepare": 0.05, "track": 0.5, "pose": 0.25, "render": 0.08, "voice": 0.05, "mux": 0.07}
+STAGE_WEIGHTS = {"prepare": 0.05, "track": 0.5, "pose": 0.22, "render": 0.08, "voice": 0.05, "mux": 0.05, "blur": 0.05}
 
 
 class JobManager:
@@ -127,18 +127,19 @@ class JobManager:
         return job
 
     def blur(self, job_id: str, params: dict) -> Job:
-        """Queue an opt-in blurred version of a finished job. Raises ValueError when not possible."""
+        """Queue (re-)making the blurred videos of a finished job. Raises ValueError when not possible."""
         job = self.jobs.get(job_id)
         if job is None:
             raise ValueError("job not found")
-        bp = BlurParams(**params)
+        params = {**params, "enabled": True}
+        BlurParams(**params)  # validate
         if job.status != "done":
             raise ValueError("job is not finished")
         if job.original_discarded or not (job.dir / "original.mp4").exists():
             raise ValueError("the original was discarded, so there is nothing to blur")
-        if job.tasks.get(bp.method, {}).get("status") in ("queued", "running"):
-            raise ValueError(f"a {bp.method} blur is already queued")
-        job.tasks[bp.method] = {"status": "queued", "progress": 0.0, "message": "", "error": None}
+        if job.tasks.get("blur", {}).get("status") in ("queued", "running"):
+            raise ValueError("a blur is already queued")
+        job.tasks["blur"] = {"status": "queued", "progress": 0.0, "message": "", "error": None}
         job.save()
         self.queue.put(("blur", job.id, params))
         return job
@@ -155,7 +156,7 @@ class JobManager:
                 self._run(job)
 
     def _blur(self, job: Job, params: BlurParams) -> None:
-        task = job.tasks[params.method]
+        task = job.tasks["blur"]
         task["status"] = "running"
         job.save()
         last_save = 0.0
@@ -168,11 +169,9 @@ class JobManager:
                 job.save()
 
         try:
-            seed = job.params.get("seed")
-            if seed is None:  # job from before seeds existed
-                seed = job.params["seed"] = pipeline.new_seed()
             min_score = pipeline.PipelineParams.from_dict(job.params).pose.min_score
-            pipeline.blur(job.dir, params, seed, min_score, progress)
+            pipeline.blur(job.dir, params, min_score, progress)
+            job.params["blur"] = asdict(params)
             task.update(status="done", progress=1.0, message="done", error=None)
         except Exception as e:
             traceback.print_exc()

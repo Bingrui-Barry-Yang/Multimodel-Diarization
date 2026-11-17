@@ -7,10 +7,10 @@ raw video ──► normalise (CFR H.264) ──► detect + segment + track ─
           └─► audio 16 kHz mono ──► McAdams formant shift (seeded α)         ───────────────────────┘  (blobs + altered voice)
                                                                                 tracks.json (per-frame polygons, IDs)
                      tracked boxes ──► RTMPose (top-down) ──► poses.json ──► pose.mp4, blobpose.mp4 (+ altered voice)
-   opt-in, after processing: original + tracks + poses ──► blur.py ──► blurred.mp4, faceblur.mp4 (+ altered voice)
+   opt-in: original + tracks + poses ──► light blur ──► blurred.mp4 (+ blobs / pose / both layers, + altered voice)
 ```
 
-Optionally, after processing, a **blurred version** of the original can be made: people keep their motion and outline, but their faces are gone (see [Blurred versions](#blurred-versions)).
+Optionally, **lightly blurred** versions of the original can be made, at upload or later: motion and body edges stay readable, fine detail and faces do not, and the blob / pose layers can be drawn on top (see [Blurred versions](#blurred-versions)).
 
 ## Setup
 
@@ -136,14 +136,15 @@ Jobs are stored in `blob_tool/workspace/` on the host and are shared with `make 
 
 ## Using the UI
 
-1. Drop a video (or click to choose one). Pick the objects to blob (default `person`) and the blob style, optionally enter a seed (empty = a fresh secret one; see [Voice alteration](#voice-alteration)), then click **Process**.
+1. Drop a video (or click to choose one). Pick the objects to blob (default `person`) and the blob style, optionally enter a seed (empty = a fresh secret one; see [Voice alteration](#voice-alteration)) and tick *Blur* to also make blurred videos, then click **Process**.
 2. When it finishes:
-   - **Original / Blobs / Pose / Blobs+Pose / Overlay / Split / Blurred / Face blur** (keys `1`–`8`) switch the view. Pose and Blobs+Pose play the rendered stick-figure videos; Overlay draws blobs and skeletons over the original. Split has a draggable before/after divider. Blurred and Face blur become available once made with **Blur…**.
+   - **Original / Blobs / Pose / Blobs+Pose / Overlay / Split** (keys `1`–`6`) switch the view. Pose and Blobs+Pose play the rendered stick-figure videos; Overlay draws blobs and skeletons over the original. Split has a draggable before/after divider.
+   - **Blur** (key `b`) is a switch on top of the modes: Original then shows the blurred video, and Blobs / Pose / Blobs+Pose show those layers over it (translucent blobs with solid outlines). If the job has no blurred videos yet, the switch makes them (strength and face options); **Re-blur…** makes them again with other settings.
    - **Seek bar**: the strip behind it shows how many objects are visible over time. The selected object's presence is drawn as a coloured line on top.
    - **Objects panel**: click a row, or click a blob in the video, to select it. The other blobs dim, its outline and label are drawn, and the player jumps to it if it is off-screen. 👁 hides a blob.
    - **Audio**: altered, original or mute.
    - `space` plays and pauses, `←`/`→` step one frame (with `shift`, ten frames), `esc` deselects.
-3. **Blur…** makes a blurred version of the original (strong, or heads-only as in the paper baseline); see [Blurred versions](#blurred-versions). It needs the original, so do it before deleting the original files.
+3. Blurring needs the original, so make the blurred videos before deleting the original files.
 4. **Downloads**: processed video (blobs + altered voice), altered wav, `tracks.json`, with pose on the pose and blobs+pose videos and `poses.json`, and any blurred videos you made.
 5. **Delete original files** removes the full-quality original video and voice (`original.mp4`, `original.wav`); blurred versions you made are outputs and stay. The checkbox *Discard original after processing* does this automatically, which matches how the phone version will behave. The raw upload is always deleted after processing.
 
@@ -181,18 +182,15 @@ Skeletons are drawn from keypoints only (`render.draw_skeletons`): in the blob's
 
 ## Blurred versions
 
-The blob and pose videos keep no original pixels at all. A blurred video sits in between: it keeps the scene, motion and body outlines that a model (or a person) might need, and removes faces. Following Li et al. [16], who blurred faces before sending classroom video to Gemini, **Blur…** in the viewer makes one of two versions of a finished job, from `original.mp4`, `tracks.json` and `poses.json` (nothing is tracked again):
+The blob and pose videos keep no original pixels at all. A blurred video sits in between: it keeps the scene, motion and body edges that a model (or a person) might need, and removes fine detail. Li et al. [16] blurred faces before sending classroom video to Gemini; here the **whole frame** is blurred lightly, with an extra blur on faces.
 
-| Method | File | What it does |
-|---|---|---|
-| **Strong** (recommended) | `blurred.mp4` | 1. The whole frame is shrunk to *detail* px on its long side (default 160) with area averaging and scaled back up, so fine detail is gone everywhere, including faces the detector missed, name tags and writing. 2. Each head becomes *blocks*×*blocks* (default 3×3) block means plus fresh noise from the job seed, on a grid fixed to the head. 3. Crisp outlines from the tracked polygons are drawn in the blob colours, so edges and IDs survive. |
-| **Face blur** (paper baseline) | `faceblur.mp4` | Gaussian blur (σ = head width / 3) on each head box; everything else is untouched. Kept as the comparison baseline: blurred and finely pixelated faces can still be recognised by neural networks [17], and faces the detector missed are not touched. |
+- **Whole frame**: shrunk by *strength* (default 2.5×, range 1.5–6) with area averaging and scaled back up. It looks like a soft blur, not blocks, and motion and edges stay readable. It is a downsample rather than a Gaussian blur on purpose: many originals map to the same output, so the lost detail cannot be recovered, while a Gaussian blur can be partly deconvolved and blurred faces can be recognised by neural networks [17]. `tests/test_blur.py` builds two originals that differ in fine detail everywhere (a ±30 checkerboard, faces included) and checks that their blurred outputs are byte-identical.
+- **Extra blur on faces** (default on): each head with at least two confident nose/eye/ear keypoints gets a Gaussian blur inside an ellipse about 1.3× its width, with a feathered edge. On the 320×240 ClassBank lesson this covers about 10 % of the frame. (A first version used big noisy mosaic blocks joined with the top of each blob; that covered 40–60 % of the frame and hid everything.) People without head keypoints get only the whole-frame blur.
+- **Layers**: one pass over the original writes `blurred.mp4`, `blurred_blobs.mp4` (translucent blobs, 45 %, with solid outlines), and with pose on `blurred_pose.mp4` and `blurred_blobpose.mp4`, all with the altered audio.
 
-**Detection and pose run on the clear video; only the saved output is blurred.** Running them on blurred frames would miss many small students, and locating heads needs the clear-frame keypoints (a face missed there would stay unblurred). `tracks.json` and `poses.json` hold geometry only. This matches the phone plan: process clear frames on the device, save only processed output. (Running blob/pose *on* a blurred video would be a separate experiment, "what can someone with only the blurred video recover", and is not built in.)
+Tick *Blur* in Settings to make them while processing, or use the **Blur** switch / **Re-blur…** in the viewer later (`POST /api/jobs/{id}/blur`, queued like a job; it needs `original.mp4`). **Detection and pose run on the clear video; only the saved output is blurred.** Running them on blurred frames would miss small students, and the face blur needs clear-frame keypoints. `tracks.json` and `poses.json` hold geometry only, which matches the phone plan: process clear frames on the device, save only processed output.
 
-Heads are located as the top of each blob (top 25 %, at least 0.6× its width), joined with a box around the nose/eye/ear keypoints when pose found them, so low-resolution keypoints can only add coverage.
-
-Why the strong version cannot be undone: the output is a function of the downsampled frame only. `tests/test_blur.py` builds two originals that differ in fine detail everywhere (a ±30 checkerboard, faces included) and checks that their strong outputs are byte-identical, so that detail is simply not in the file. Heads keep at most *blocks*² colours, with noise that changes every frame, so averaging frames does not sharpen them. What remains visible: clothing colours, body shape, the room. People who know the children may still recognise them from these, and from the voice rhythm. That is why blurred versions are treated like the original in the LLM comparison (opt-in, confirmed per run).
+What remains visible: clothing colours, body shape, the room, and at low strength a large face close to the camera. People who know the children may still recognise them. That is why the blurred versions are treated like the original in the LLM comparison (opt-in, confirmed per run).
 
 ## Voice alteration
 
@@ -202,11 +200,11 @@ The **same α is used for the whole recording**, so all speakers move through th
 
 **Seed.** By default α is drawn from a **secret per-job seed** in 0.75–0.90 (milder than the VoicePrivacy range of 0.5–0.9, so classroom speech stays intelligible), with no pitch shift, plus a noise floor 45 dB below the peak. Leave the seed field empty and a new 63-bit seed is generated with `secrets`; enter a number only to reproduce a run. The seed is stored only in the local `workspace/<job>/job.json` (the UI reads it through the local API) and never in a served file, `tracks.json`, `poses.json` or an LLM request, and the drawn α is not written anywhere either. So whoever receives the audio does not know which inverse transform to apply, and the noise floor makes a sample-exact inverse impossible. An earlier version also drew a random pitch shift: it did not make inversion meaningfully harder (it only adds a second value to search), and the simple overlap-add shifter made speech grainy and hard to understand, so pitch is now only shifted with fixed values. *Fixed voice values (no seed)* restores the old sliders for controlled experiments; known values are easy to undo.
 
-This hides the parameter; it is **not a cryptographic guarantee**. McAdams is a *light* anonymiser: an attacker who knows the method can search α by ear and partly invert it [5, 6]. Making the voice truly unrecoverable needs neural voice conversion (below). For stronger privacy, the next step is neural voice conversion (kNN-VC, or StreamVC-style streaming VC) to a fixed target pool behind the same `anonymize()` interface.
+This hides the parameter; it is **not a cryptographic guarantee**. McAdams is a *light* anonymiser: an attacker who knows the method can search α by ear and partly invert it [5, 6]. Making the voice truly unrecoverable needs neural voice conversion: the next step is kNN-VC or StreamVC-style streaming VC to a fixed target pool behind the same `anonymize()` interface.
 
 ## LLM comparison
 
-The research question is whether a model can still tell who is doing and saying what once the video is reduced to blobs or skeletons. **Compare with LLM** sends one prompt (default: *"Describe what happens in this video and who said what."*) to Gemini about up to six versions of the same job, and shows the answers side by side with each video:
+The research question is whether a model can still tell who is doing and saying what once the video is reduced to blobs or skeletons. **Compare with LLM** sends one prompt (default: *"Describe what happens in this video and who said what."*) to Gemini about up to eight versions of the same job, and shows the answers side by side with each video:
 
 | Version | File sent | Audio |
 |---|---|---|
@@ -214,14 +212,13 @@ The research question is whether a model can still tell who is doing and saying 
 | Blobs | `processed.mp4` | altered |
 | Pose | `pose.mp4` | altered |
 | Blobs + Pose | `blobpose.mp4` | altered |
-| Blurred | `blurred.mp4` (if made) | altered |
-| Face blur | `faceblur.mp4` (if made) | altered |
+| Blurred, Blurred + Blobs, Blurred + Pose, Blurred + Blobs + Pose | `blurred.mp4`, `blurred_blobs.mp4`, `blurred_pose.mp4`, `blurred_blobpose.mp4` (if made) | altered |
 
 - **No cross-talk between versions.** Each version is its own request (`llm.py`): a new client, a fresh upload streamed under the neutral name `video.mp4` (so file names like "blob" or "pose" give nothing away), one stateless `generate_content` call with `temperature = 0`, and no chat history. The upload is deleted right after the answer.
 - Runs are queued on their own worker thread, so they never block video processing. Versions are sent one after another to stay inside free-tier rate limits. Each run is saved as `workspace/<job>/llm/<run>.json` (prompt, model, and per-version answer, error and time) and deleted with the job.
 - Models: `gemini-3.5-flash-lite` (default) and `gemini-3.8-flash`, both on the free tier with video input according to Google's pricing page (checked 2026-11).
 
-**Privacy.** On the free tier, Google's terms say submitted content *is used to improve Google's products* and may be read by human reviewers, and they ask you not to send personal information. The blob and pose versions contain no original pixels, but the voices are only lightly anonymised (see [Voice alteration](#voice-alteration)). The **original** and the two **blurred** versions (which still contain original pixels) are never pre-selected. Sending any of them needs a confirmation tick for every run, and the API refuses them without `confirm_original: true`. Do not send footage of children without consent, and check the dataset's terms first (for example, ClassBank is CC BY-NC-SA and footage of children). The AMI sample (adults, CC BY 4.0) is the safe test case. A paid key (billing enabled) switches Google to the paid-tier terms, where content is not used for training.
+**Privacy.** On the free tier, Google's terms say submitted content *is used to improve Google's products* and may be read by human reviewers, and they ask you not to send personal information. The blob and pose versions contain no original pixels, but the voices are only lightly anonymised (see [Voice alteration](#voice-alteration)). The **original** and the **blurred** versions (which still contain original pixels) are never pre-selected. Sending any of them needs a confirmation tick for every run, and the API refuses them without `confirm_original: true`. Do not send footage of children without consent, and check the dataset's terms first (for example, ClassBank is CC BY-NC-SA and footage of children). The AMI sample (adults, CC BY 4.0) is the safe test case. A paid key (billing enabled) switches Google to the paid-tier terms, where content is not used for training.
 
 ## Outputs (`workspace/<job>/`)
 
@@ -232,8 +229,7 @@ The research question is whether a model can still tell who is doing and saying 
 | `tracks.json` | `objects[]` (id, label, colour, first/last frame) and `frames[i] = [[id, [x0,y0,x1,y1,…normalised], …], …]` | ✅ |
 | `poses.json` | `keypoints` (17 COCO names), `skeleton` (index pairs) and `frames[i] = [[id, x0,y0,s0, …, x16,y16,s16], …]`, x/y normalised | ✅ (body keypoints, no pixels) |
 | `pose.mp4`, `blobpose.mp4` | stick figures only / blobs + stick figures, with altered audio | ✅ |
-| `blurred.mp4` | opt-in strong blur of the original, with altered audio | ⚠️ no faces or fine detail; clothes, bodies and room remain |
-| `faceblur.mp4` | opt-in heads-only blur (paper baseline), with altered audio | ❌ weak, for comparison only |
+| `blurred.mp4`, `blurred_blobs.mp4`, `blurred_pose.mp4`, `blurred_blobpose.mp4` | opt-in light blur of the original, alone or under blobs / pose / both, with altered audio | ⚠️ no fine detail, faces blurred; clothes, bodies and room remain |
 | `original.mp4`, `original.wav` | normalised copy of the input, kept only for before/after comparison | ❌ deleted by "discard original" |
 | `llm/<run>.json` | LLM comparison runs: prompt, model, answers per version (not served as a file) | text only |
 
@@ -270,7 +266,7 @@ The goal is to record live and save only the processed output.
 3. Pose: either Apple's Vision `VNDetectHumanBodyPoseRequest` (built in, 2D, several people per frame) or RTMPose exported to CoreML ([rtmlib-coreml](https://github.com/Kinetix-ML/rtmlib-coreml)), run on the tracker's boxes as here.
 4. Render blobs with Metal/Core Graphics from the polygons, and write only blob frames to `AVAssetWriter`. Camera frames never touch disk.
 5. Apply McAdams per audio buffer in an `AVAudioEngine` tap. It is frame-based with 50 % overlap-add, so it streams with 20 ms of latency.
-6. If a blurred version is wanted, the strong blur is per frame (resize, block means, polylines), so it can run on the camera frames before `AVAssetWriter` in the same way.
+6. If blurred video is wanted, the blur is per frame (resize, a small Gaussian per face, translucent polygons), so it can run on the camera frames before `AVAssetWriter` in the same way.
 
 ## License
 
@@ -299,7 +295,7 @@ This project is licensed under the **GNU AGPL-3.0** (see [`LICENSE`](../LICENSE)
 | ClassBank / TalkBank corpora [11–13] (manual download, never committed) | classroom test clips with speaker-timed transcripts | CC BY-NC-SA 4.0 |
 | FFmpeg (system install, not bundled) | video/audio decoding and encoding | LGPL/GPL, depending on build |
 
-The McAdams voice anonymiser (`voice.py`) is an independent implementation of the method described in [5]. No code was copied from the VoicePrivacy Challenge baselines. The blur methods (`blur.py`) are our own; the face-blur baseline follows the description in [16], with no code taken from its repository.
+The McAdams voice anonymiser (`voice.py`) is an independent implementation of the method described in [5]. No code was copied from the VoicePrivacy Challenge baselines. The blur (`blur.py`) is our own; the idea of blurring faces for LLM analysis follows [16], with no code taken from its repository.
 
 ## References
 

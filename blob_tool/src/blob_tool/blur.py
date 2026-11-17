@@ -1,14 +1,10 @@
-"""Blurred versions of the original: people keep their motion and outline, faces lose their identity.
+"""Light whole-frame blur of the original, alone or under blob / pose overlays.
 
-strong (blurred.mp4): the whole frame is area-downsampled to ``detail`` px on its long side, so fine
-  detail (including faces the detector missed, name tags, writing) is gone for good; every head is
-  replaced by ``head_blocks``² block means plus fresh noise; crisp outlines from the tracked polygons
-  are drawn on top so edges and IDs survive.
-face (faceblur.mp4): the baseline of Li et al. (AIED 2026), Gaussian blur on head boxes only and the
-  rest left as it is. Weaker: blurred faces can be recognised, and missed faces are not touched.
-
-Heads are located from the pose keypoints (nose, eyes, ears) of the clear video, or else the top of
-the blob. Detection and pose always run on the clear frames; only the saved output is blurred.
+The frame is area-downsampled by ``strength`` and scaled back up: a soft blur that keeps motion and
+body edges readable and cannot be undone, since many originals map to the same output (a Gaussian
+blur, by contrast, can be partly deconvolved). With ``faces`` on, each head found by the pose
+keypoints (nose, eyes, ears) gets an extra Gaussian blur inside an ellipse about its own size.
+Detection and pose always run on the clear video; only the saved output is blurred.
 """
 
 from __future__ import annotations
@@ -19,121 +15,120 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .render import TrackStore, color_for
+from .render import TrackStore, color_for, draw_skeletons
 
-METHODS = {"strong": "blurred.mp4", "face": "faceblur.mp4"}
-BLUR_STREAM = 3  # sub-stream of the job seed (voice uses 1 and 2)
+LAYERS = {  # file → (blobs, pose) drawn over the blurred frame
+    "blurred.mp4": (False, False),
+    "blurred_blobs.mp4": (True, False),
+    "blurred_pose.mp4": (False, True),
+    "blurred_blobpose.mp4": (True, True),
+}
 HEAD = [0, 1, 2, 3, 4]  # COCO nose, eyes, ears
 SHOULDERS = (5, 6)
+BLOB_ALPHA = 0.45  # blob fill opacity over the blurred frame
 
-Box = tuple[int, int, int, int]  # x0, y0, x1, y1
+Ellipse = tuple[float, float, float, float]  # cx, cy, semi-axis x, semi-axis y
 
 
 @dataclass
 class BlurParams:
-    method: str = "strong"
-    detail: int = 160  # long side of the downsampled frame (strong)
-    head_blocks: int = 3  # blocks across each head (strong)
-    noise: float = 12.0  # std of the per-block noise, in grey levels (strong)
-    outlines: bool = True  # draw the blob outlines (strong)
+    enabled: bool = False
+    strength: float = 2.5  # downsampling factor of the whole frame
+    faces: bool = True  # extra blur on heads located by pose keypoints
 
     def __post_init__(self) -> None:
-        if self.method not in METHODS:
-            raise ValueError(f"method must be one of {list(METHODS)}")
-        if not 32 <= self.detail <= 640:
-            raise ValueError("detail must be 32–640")
-        if not 1 <= self.head_blocks <= 8:
-            raise ValueError("head_blocks must be 1–8")
+        if not 1.5 <= self.strength <= 6:
+            raise ValueError("strength must be 1.5–6")
 
 
-def head_boxes(row, pose_row, min_score: float, width: int, height: int) -> list[Box]:
-    """One box per tracked object: the top of its blob, joined with a box around its head keypoints.
-
-    Keypoints alone can sit too high or too small on low-resolution footage, so they only ever add
-    coverage (for a person bending over, whose head is not at the top of the blob)."""
-    kpts = dict(pose_row or [])
-    boxes = []
-    for oid, polys in row:
-        pts = np.vstack(polys)
-        bx0, by0 = pts.min(0)
-        bx1, by1 = pts.max(0) + 1
-        bw, bh = bx1 - bx0, by1 - by0
-        k = kpts.get(oid)
-        head = k[HEAD][k[HEAD, 2] >= min_score] if k is not None else np.empty((0, 3))
-        x0, y0, x1, y1 = bx0, by0, bx1, by0 + min(bh, max(0.25 * bh, 0.6 * bw))  # top of the blob
-        if len(head):
-            cx, cy = head[:, :2].mean(0)
-            size = max(2.2 * np.ptp(head[:, 0]), 0.3 * bw, 8.0)
-            if k[SHOULDERS[0], 2] >= min_score and k[SHOULDERS[1], 2] >= min_score:
-                size = max(size, 0.8 * abs(k[SHOULDERS[0], 0] - k[SHOULDERS[1], 0]))
-            size *= 1.3
-            x0, y0 = min(x0, cx - size / 2), min(y0, cy - 0.6 * size)
-            x1, y1 = max(x1, cx + size / 2), max(y1, cy + 0.6 * size)
-        x0, y0 = max(0, int(np.floor(x0))), max(0, int(np.floor(y0)))
-        x1, y1 = min(width, int(np.ceil(x1))), min(height, int(np.ceil(y1)))
-        if x1 > x0 and y1 > y0:
-            boxes.append((x0, y0, x1, y1))
-    return boxes
-
-
-def strong(frame: np.ndarray, boxes: list[Box], params: BlurParams, rng: np.random.Generator) -> np.ndarray:
+def blur_base(frame: np.ndarray, strength: float) -> np.ndarray:
     h, w = frame.shape[:2]
-    s = min(1.0, params.detail / max(h, w))
-    small = cv2.resize(frame, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA)
-    out = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
-    n = params.head_blocks
-    for x0, y0, x1, y1 in boxes:  # from the already downsampled frame, so heads hold even less
-        region = out[y0:y1, x0:x1]
-        blocks = cv2.resize(region, (n, n), interpolation=cv2.INTER_AREA).astype(np.float64)
-        blocks += rng.normal(0.0, params.noise, blocks.shape)
-        blocks = np.clip(blocks, 0, 255).astype(np.uint8)
-        out[y0:y1, x0:x1] = cv2.resize(blocks, (x1 - x0, y1 - y0), interpolation=cv2.INTER_NEAREST)
+    small = cv2.resize(frame, (max(1, round(w / strength)), max(1, round(h / strength))), interpolation=cv2.INTER_AREA)
+    return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
+def face_ellipses(pose_row, min_score: float) -> list[Ellipse]:
+    """An ellipse about the size of each head with at least two confident head keypoints."""
+    out = []
+    for _, k in pose_row or []:
+        head = k[HEAD][k[HEAD, 2] >= min_score]
+        if len(head) < 2:
+            continue
+        size = max(1.2 * np.ptp(head[:, 0]), 6.0)
+        if k[SHOULDERS[0], 2] >= min_score and k[SHOULDERS[1], 2] >= min_score:
+            size = max(size, 0.45 * abs(k[SHOULDERS[0], 0] - k[SHOULDERS[1], 0]))
+        d = 1.3 * size
+        cx, cy = head[:, :2].mean(0)
+        out.append((float(cx), float(cy - 0.05 * d), d / 2, 0.6 * d))
     return out
 
 
-def face_only(frame: np.ndarray, boxes: list[Box]) -> np.ndarray:
-    out = frame.copy()
-    for x0, y0, x1, y1 in boxes:
-        region = np.ascontiguousarray(out[y0:y1, x0:x1])
-        out[y0:y1, x0:x1] = cv2.GaussianBlur(region, (0, 0), max(1.0, (x1 - x0) / 3))
-    return out
+def blur_faces(img: np.ndarray, ellipses: list[Ellipse]) -> np.ndarray:
+    h, w = img.shape[:2]
+    for cx, cy, ax, ay in ellipses:
+        m = ax + ay  # room for the blur and the feathered edge
+        x0, y0 = max(0, int(cx - ax - m)), max(0, int(cy - ay - m))
+        x1, y1 = min(w, int(cx + ax + m) + 1), min(h, int(cy + ay + m) + 1)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        crop = img[y0:y1, x0:x1].astype(np.float32)
+        blurred = cv2.GaussianBlur(crop, (0, 0), max(1.0, ax / 2))
+        mask = np.zeros(crop.shape[:2], np.float32)
+        cv2.ellipse(mask, (round(cx - x0), round(cy - y0)), (max(1, round(ax)), max(1, round(ay))), 0, 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), max(1.0, ax / 4))[..., None]
+        img[y0:y1, x0:x1] = (crop * (1 - mask) + blurred * mask).round().astype(np.uint8)
+    return img
 
 
-def draw_outlines(img: np.ndarray, row) -> np.ndarray:
+def blur_frame(frame: np.ndarray, pose_row, params: BlurParams, min_score: float = 0.3) -> np.ndarray:
+    out = blur_base(frame, params.strength)
+    return blur_faces(out, face_ellipses(pose_row, min_score)) if params.faces else out
+
+
+def draw_overlay_blobs(img: np.ndarray, row) -> np.ndarray:
+    """Translucent blobs with a solid outline, so the blurred people stay visible underneath."""
+    fill = img.copy()
     t = max(2, round(min(img.shape[:2]) / 360))
+    for oid, polys in row:
+        r, g, b = color_for(oid - 1)
+        cv2.fillPoly(fill, [p.astype(np.int32) for p in polys], (b, g, r), lineType=cv2.LINE_AA)
+    img = cv2.addWeighted(fill, BLOB_ALPHA, img, 1 - BLOB_ALPHA, 0)
     for oid, polys in row:
         r, g, b = color_for(oid - 1)
         cv2.polylines(img, [p.astype(np.int32) for p in polys], True, (b, g, r), t, cv2.LINE_AA)
     return img
 
 
-def blur_frame(frame: np.ndarray, row, pose_row, params: BlurParams, rng: np.random.Generator,
-               min_score: float = 0.3) -> np.ndarray:
-    h, w = frame.shape[:2]
-    boxes = head_boxes(row, pose_row, min_score, w, h)
-    if params.method == "face":
-        return face_only(frame, boxes)
-    out = strong(frame, boxes, params, rng)
-    return draw_outlines(out, row) if params.outlines else out
+def layer_frame(base: np.ndarray, row, pose_row, blobs: bool, pose: bool, min_score: float = 0.3) -> np.ndarray:
+    img = base.copy()
+    if blobs:
+        img = draw_overlay_blobs(img, row)
+    if pose and pose_row:
+        draw_skeletons(img, pose_row, min_score, on_blobs=blobs)
+    return img
 
 
-def render_video(video: Path, store: TrackStore, poses, params: BlurParams, seed: int, dst: Path,
-                 min_score: float = 0.3, progress=None) -> None:
-    rng = np.random.default_rng([seed, BLUR_STREAM])
+def render_videos(video: Path, store: TrackStore, poses, params: BlurParams, dsts: dict[str, Path],
+                  min_score: float = 0.3, progress=None) -> None:
+    """Read the original once and write every requested layer (``dsts`` maps a LAYERS name to a path)."""
     cap = cv2.VideoCapture(str(video))
-    writer = cv2.VideoWriter(str(dst), cv2.VideoWriter_fourcc(*"mp4v"), store.fps, (store.width, store.height))
-    if not writer.isOpened():
-        raise RuntimeError("could not open video writer")
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writers = {name: cv2.VideoWriter(str(p), fourcc, store.fps, (store.width, store.height)) for name, p in dsts.items()}
     n = len(store.frames)
     try:
+        if not all(w.isOpened() for w in writers.values()):
+            raise RuntimeError("could not open video writer")
         for i, row in enumerate(store.frames):
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError(f"original ended at frame {i} of {n}")
             pose_row = poses[i] if poses is not None and i < len(poses) else None
-            writer.write(blur_frame(frame, row, pose_row, params, rng, min_score))
+            base = blur_frame(frame, pose_row, params, min_score)
+            for name, writer in writers.items():
+                writer.write(layer_frame(base, row, pose_row, *LAYERS[name], min_score))
             if progress and i % 10 == 0:
                 progress((i + 1) / n, f"blurring frame {i + 1}/{n}")
     finally:
         cap.release()
-        writer.release()
+        for w in writers.values():
+            w.release()

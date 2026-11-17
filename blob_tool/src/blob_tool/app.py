@@ -26,10 +26,8 @@ llm_manager = llm.LlmManager(manager)
 
 
 class BlurRequest(BaseModel):
-    method: str = "strong"
-    detail: int = 160
-    head_blocks: int = 3
-    outlines: bool = True
+    strength: float = 2.5
+    faces: bool = True
 
 
 class LlmRequest(BaseModel):

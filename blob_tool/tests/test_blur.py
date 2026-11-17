@@ -1,12 +1,12 @@
-"""Blurred outputs: what survives, what is gone for good."""
+"""Light blur: what survives, what is gone for good, and how big the face blur is."""
 
 import numpy as np
 import pytest
 
-from blob_tool.blur import BlurParams, blur_frame, head_boxes
+from blob_tool.blur import BLOB_ALPHA, BlurParams, blur_base, blur_frame, face_ellipses, layer_frame
 from blob_tool.render import BlobParams, TrackStore, color_for, mask_to_polygons
 
-W, H = 320, 160  # detail=160 → exactly 2×2 pixel cells, so cell means are easy to control
+W, H = 320, 160
 
 
 def person(x=160, top=30, w=60, h=110):
@@ -15,10 +15,10 @@ def person(x=160, top=30, w=60, h=110):
     return [(1, mask_to_polygons(m, BlobParams(smooth=0)))]
 
 
-def pose_for(x=160, head_y=45):
+def pose_for(x=160, head_y=45, ear=9):
     k = np.zeros((17, 3))
     k[:, 2] = 1.0
-    k[:5, :2] = [[x, head_y], [x - 5, head_y - 3], [x + 5, head_y - 3], [x - 9, head_y], [x + 9, head_y]]
+    k[:5, :2] = [[x, head_y], [x - 5, head_y - 3], [x + 5, head_y - 3], [x - ear, head_y], [x + ear, head_y]]
     k[5:, :2] = [x, head_y + 40]
     k[5, 0], k[6, 0] = x - 20, x + 20
     return [(1, k)]
@@ -31,63 +31,68 @@ def smooth_frame():
 
 
 def test_fine_detail_cannot_be_recovered():
-    """Two originals that differ only in fine detail (a ±30 checkerboard, everywhere including the
-    face) give byte-identical strong outputs: that information is not in the output at all."""
+    """Two originals that differ only in fine detail (a ±30 checkerboard everywhere, faces included)
+    give byte-identical blurred outputs: that information is not in the output at all."""
     a = smooth_frame()
     checker = np.where((np.indices((H, W)).sum(0) % 2) == 0, 30, -30)[..., None]
     b = (a.astype(int) + checker).astype(np.uint8)
-    assert np.abs(a.astype(int) - b).mean() > 25
-    p = BlurParams(detail=160)
-    outs = [blur_frame(x, person(), pose_for(), p, np.random.default_rng(0)) for x in (a, b)]
-    np.testing.assert_array_equal(outs[0], outs[1])
+    p = BlurParams(enabled=True, strength=2)
+    np.testing.assert_array_equal(blur_frame(a, pose_for(), p), blur_frame(b, pose_for(), p))
 
 
-def test_head_becomes_a_few_noisy_blocks():
-    p = BlurParams(head_blocks=3, outlines=False)
+def test_light_blur_keeps_edges():
+    frame = np.zeros((H, W, 3), np.uint8)
+    frame[:, W // 2:] = 200  # a hard vertical edge
+    out = blur_base(frame, 2.5)
+    row = out[H // 2, :, 0].astype(int)
+    assert row[: W // 2 - 4].max() == 0 and row[W // 2 + 4:].min() == 200  # the edge moves by a few px at most
+
+
+def test_face_blur_is_head_sized_and_local():
+    (cx, cy, ax, ay), = face_ellipses(pose_for(ear=9), 0.3)
+    assert abs(cx - 160) < 1 and 40 < cy < 46
+    assert 1.2 * 18 <= 2 * ax <= 1.7 * 18  # ear-to-ear 18 px → about 1.3× head width, not a slab
     frame = np.random.default_rng(1).integers(0, 255, (H, W, 3), np.uint8)
-    (x0, y0, x1, y1), = head_boxes(person(), pose_for(), 0.3, W, H)
-    assert x0 < 160 < x1 and y0 < 45 < y1
-    outs = [blur_frame(frame, person(), pose_for(), p, np.random.default_rng(s)) for s in (0, 1)]
-    head = outs[0][y0:y1, x0:x1].reshape(-1, 3)
-    assert len(np.unique(head, axis=0)) <= 9
-    assert not np.array_equal(outs[0][y0:y1, x0:x1], outs[1][y0:y1, x0:x1])  # fresh noise per seed
-    np.testing.assert_array_equal(outs[0][:y0], outs[1][:y0])  # noise only inside heads
+    on = blur_frame(frame, pose_for(), BlurParams(faces=True))
+    off = blur_frame(frame, pose_for(), BlurParams(faces=False))
+    changed = np.abs(on.astype(int) - off).sum(-1) > 0
+    ys, xs = np.nonzero(changed)
+    assert changed[round(cy), round(cx)]
+    assert xs.min() >= cx - 3 * ax and xs.max() <= cx + 3 * ax and ys.min() >= cy - 3 * ay and ys.max() <= cy + 3 * ay
+    assert changed.mean() < 0.05
 
 
-def test_without_keypoints_the_top_of_the_blob_is_covered():
-    (x0, y0, x1, y1), = head_boxes(person(top=30, w=60, h=110), None, 0.3, W, H)
-    assert (y0, x0, x1) == (30, 130, 190) and y1 >= 30 + 0.25 * 110
+def test_no_head_keypoints_no_face_blur():
     low = pose_for()
-    low[0][1][:5, 2] = 0.1  # head keypoints below min_score count as missing
-    assert head_boxes(person(), low, 0.3, W, H) == [(x0, y0, x1, y1)]
-
-
-def test_keypoints_only_add_coverage():
-    top, = head_boxes(person(), None, 0.3, W, H)
-    bent, = head_boxes(person(), pose_for(head_y=100), 0.3, W, H)  # head well below the blob top
-    assert bent[0] <= top[0] and bent[1] <= top[1] and bent[2] >= top[2] and bent[3] > 100
-
-
-def test_outlines_use_the_blob_colour():
-    out = blur_frame(np.full((H, W, 3), 128, np.uint8), person(), None, BlurParams(), np.random.default_rng(0))
-    r, g, b = color_for(0)
-    assert (np.abs(out.astype(int) - (b, g, r)).sum(-1) <= 3).sum() > 50
-
-
-def test_face_method_only_touches_heads():
+    low[0][1][:5, 2] = 0.1
+    assert face_ellipses(low, 0.3) == [] and face_ellipses(None, 0.3) == []
     frame = np.random.default_rng(2).integers(0, 255, (H, W, 3), np.uint8)
-    out = blur_frame(frame, person(), pose_for(), BlurParams(method="face"), np.random.default_rng(0))
-    (x0, y0, x1, y1), = head_boxes(person(), pose_for(), 0.3, W, H)
-    inside = np.zeros((H, W), bool)
-    inside[y0:y1, x0:x1] = True
-    np.testing.assert_array_equal(out[~inside], frame[~inside])
-    assert out[inside].std() < frame[inside].std() * 0.5
+    np.testing.assert_array_equal(blur_frame(frame, low, BlurParams()), blur_frame(frame, low, BlurParams(faces=False)))
+
+
+def test_blobs_are_translucent_with_a_solid_outline():
+    base = np.full((H, W, 3), 100, np.uint8)
+    out = layer_frame(base, person(), None, blobs=True, pose=False)
+    r, g, b = color_for(0)
+    bgr = np.array([b, g, r], float)
+    inside = out[90, 160].astype(float)
+    np.testing.assert_allclose(inside, BLOB_ALPHA * bgr + (1 - BLOB_ALPHA) * 100, atol=1.5)
+    assert (np.abs(out.astype(int) - bgr).sum(-1) <= 3).sum() > 50  # outline in the blob colour
+    np.testing.assert_array_equal(out[5, 5], base[5, 5])
+    np.testing.assert_array_equal(layer_frame(base, person(), None, False, False), base)
+
+
+def test_pose_layer_draws_skeletons():
+    base = np.full((H, W, 3), 100, np.uint8)
+    out = layer_frame(base, person(), pose_for(), blobs=False, pose=True)
+    r, g, b = color_for(0)
+    assert (np.abs(out.astype(int) - (b, g, r)).sum(-1) <= 3).sum() > 20
 
 
 def test_bad_params_are_rejected():
-    for bad in ({"method": "pixelate"}, {"detail": 8}, {"head_blocks": 0}):
+    for bad in (1.0, 8):
         with pytest.raises(ValueError):
-            BlurParams(**bad)
+            BlurParams(strength=bad)
 
 
 def test_tracks_round_trip(tmp_path):

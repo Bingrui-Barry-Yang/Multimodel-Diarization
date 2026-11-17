@@ -25,9 +25,11 @@ VARIANTS = {  # variant → file in the job dir
     "pose": "pose.mp4",
     "blobpose": "blobpose.mp4",
     "blurred": "blurred.mp4",
-    "faceblur": "faceblur.mp4",
+    "blurred_blobs": "blurred_blobs.mp4",
+    "blurred_pose": "blurred_pose.mp4",
+    "blurred_blobpose": "blurred_blobpose.mp4",
 }
-SENSITIVE = ("original", "blurred", "faceblur")  # contain original pixels: never pre-selected, confirmed per run
+SENSITIVE = ("original", "blurred", "blurred_blobs", "blurred_pose", "blurred_blobpose")  # contain original pixels: never pre-selected, confirmed per run
 MODELS = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]  # free tier, video input
 DEFAULT_PROMPT = "Describe what happens in this video and who said what."
 MAX_PROMPT = 4000

@@ -9,8 +9,8 @@ Outputs in the job directory:
   poses.json      per-frame COCO-17 keypoints per blob ID (pose enabled)
   pose.mp4        stick figures only + anonymised audio
   blobpose.mp4    blobs + stick figures + anonymised audio
-  blurred.mp4     strongly blurred original + anonymised audio (opt-in, after processing, see blur.py)
-  faceblur.mp4    original with only the heads blurred + anonymised audio (opt-in, paper baseline)
+  blurred*.mp4    light whole-frame blur of the original, alone / + blobs / + pose / + both, with
+                  anonymised audio (opt-in, at upload or later; see blur.py)
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from .tracking.base import TrackParams
 
 ProgressFn = Callable[[str, float, str], None]  # (stage, fraction, message)
 
-STAGES = ["prepare", "track", "pose", "render", "voice", "mux"]
+STAGES = ["prepare", "track", "pose", "render", "voice", "mux", "blur"]
 MAX_HEIGHT = 1080  # downscale 4K phone footage; blobs do not need more
 
 
@@ -44,7 +44,8 @@ class PipelineParams:
     blob: BlobParams = field(default_factory=BlobParams)
     voice: voice.VoiceParams = field(default_factory=voice.VoiceParams)
     pose: PoseParams = field(default_factory=PoseParams)
-    seed: int | None = None  # secret per job: voice transform + blur noise; None = draw a new one
+    blur: blurmod.BlurParams = field(default_factory=blurmod.BlurParams)
+    seed: int | None = None  # secret per job, picks the voice transform; None = draw a new one
 
     @classmethod
     def from_dict(cls, d: dict) -> PipelineParams:
@@ -54,6 +55,7 @@ class PipelineParams:
             blob=BlobParams(**d.get("blob", {})),
             voice=voice.VoiceParams(**d.get("voice", {})),
             pose=PoseParams(**d.get("pose", {})),
+            blur=blurmod.BlurParams(**d.get("blur", {})),
             seed=parse_seed(d.get("seed")),
         )
 
@@ -136,6 +138,12 @@ def run(src: Path, workdir: Path, params: PipelineParams, progress: ProgressFn) 
         raw.unlink(missing_ok=True)
     progress("mux", 1.0, "done")
 
+    # 7. optional light blur of the original, alone and under the blob / pose layers
+    if params.blur.enabled:
+        blur(workdir, params.blur, params.pose.min_score, lambda f, m: progress("blur", f, m), store, poses)
+    else:
+        progress("blur", 1.0, "blur off")
+
     return {
         "width": info.width,
         "height": info.height,
@@ -148,24 +156,26 @@ def run(src: Path, workdir: Path, params: PipelineParams, progress: ProgressFn) 
     }
 
 
-def blur(workdir: Path, params: blurmod.BlurParams, seed: int, min_score: float,
-         progress: Callable[[float, str], None]) -> str:
-    """Opt-in blurred version of a finished job, from its original and its saved tracks and poses."""
+def blur(workdir: Path, params: blurmod.BlurParams, min_score: float, progress: Callable[[float, str], None],
+         store: TrackStore | None = None, poses=None) -> list[str]:
+    """Blurred videos of a job, from its original and its tracks and poses (read back from disk when not given)."""
     original = workdir / "original.mp4"
     if not original.exists():
         raise FileNotFoundError("the original was discarded, so there is nothing to blur")
-    store = TrackStore.read_json(workdir / "tracks.json")
-    poses_path = workdir / "poses.json"
-    poses = posemod.read_json(poses_path, store.width, store.height) if poses_path.exists() else None
-    name = blurmod.METHODS[params.method]
-    raw = workdir / name.replace(".mp4", "_raw.mp4")
+    if store is None:
+        store = TrackStore.read_json(workdir / "tracks.json")
+        poses_path = workdir / "poses.json"
+        poses = posemod.read_json(poses_path, store.width, store.height) if poses_path.exists() else None
+    names = [n for n, (_, pose) in blurmod.LAYERS.items() if poses is not None or not pose]
+    raws = {n: workdir / n.replace(".mp4", "_raw.mp4") for n in names}
     altered = workdir / "altered.wav"
     try:
-        blurmod.render_video(original, store, poses, params, seed, raw, min_score,
-                             lambda f, m: progress(0.9 * f, m))
-        progress(0.9, f"encoding {name}")
-        media.to_browser_mp4(raw, workdir / name, audio=altered if altered.exists() else None)
+        blurmod.render_videos(original, store, poses, params, raws, min_score, lambda f, m: progress(0.8 * f, m))
+        for j, (name, raw) in enumerate(raws.items()):
+            progress(0.8 + 0.2 * j / len(raws), f"encoding {name}")
+            media.to_browser_mp4(raw, workdir / name, audio=altered if altered.exists() else None)
     finally:
-        raw.unlink(missing_ok=True)
+        for raw in raws.values():
+            raw.unlink(missing_ok=True)
     progress(1.0, "done")
-    return name
+    return names
